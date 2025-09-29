@@ -123,6 +123,43 @@ class ImprovedReminderBot:
         """Показать напоминания пользователя"""
         await self.show_reminders_list(update)
 
+async def show_reminders_list(self, update: Update):
+    """Показать список напоминаний"""
+    user_id = update.message.from_user.id
+    reminders = self.db.get_user_reminders(user_id, status='active')
+    
+    print(f"DEBUG: Found {len(reminders)} reminders for user {user_id}")  # Отладка
+    
+    if not reminders:
+        await update.message.reply_text(
+            "📭 У тебя пока нет активных напоминаний.",
+            reply_markup=Keyboards.main_menu()
+        )
+        return
+    
+    reminders_text = TextFormatter.format_reminder_list(reminders)
+    print(f"DEBUG: Formatted reminders text: {reminders_text}")  # Отладка
+    
+    await update.message.reply_text(
+        reminders_text,
+        parse_mode='Markdown',
+        reply_markup=Keyboards.main_menu()
+    )
+
+async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать статистику пользователя"""
+    user_id = update.message.from_user.id
+    stats = self.db.get_user_stats(user_id)
+    
+    print(f"DEBUG: Stats for user {user_id}: {stats}")  # Отладка
+    
+    stats_text = TextFormatter.format_stats(stats)
+    await update.message.reply_text(
+        stats_text, 
+        parse_mode='Markdown',
+        reply_markup=Keyboards.main_menu()
+    )
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка обычных сообщений"""
         text = update.message.text
