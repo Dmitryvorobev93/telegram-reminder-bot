@@ -2,6 +2,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from datetime import datetime, timedelta
 import logging
+import asyncio
 from database import Database
 from utils import TimeParser
 
@@ -23,14 +24,22 @@ class ReminderScheduler:
         try:
             reminders = self.db.get_pending_reminders()
             for rem_id, user_id, text, reminder_time, repeat_type, notify_before in reminders:
-                reminder_time = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S')
+                # Исправляем парсинг времени
+                try:
+                    if '.' in reminder_time:
+                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S.%f')
+                    else:
+                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S')
+                except ValueError as e:
+                    logging.error(f"Ошибка парсинга времени {reminder_time}: {e}")
+                    continue
                 
                 # Основное напоминание
-                self.add_reminder(user_id, text, reminder_time, rem_id)
+                self.add_reminder(user_id, text, reminder_time_obj, rem_id)
                 
                 # Уведомление за N минут
                 if notify_before > 0:
-                    notify_time = reminder_time - timedelta(minutes=notify_before)
+                    notify_time = reminder_time_obj - timedelta(minutes=notify_before)
                     if notify_time > datetime.now():
                         self.add_notification(user_id, text, notify_time, rem_id, is_notification=True)
             
@@ -46,7 +55,7 @@ class ReminderScheduler:
             job_id = f"notify_{reminder_id}" if is_notification else str(reminder_id)
             
             self.scheduler.add_job(
-                self.send_reminder,
+                self.send_reminder_wrapper,  # Изменено на обертку
                 trigger,
                 id=job_id,
                 args=[user_id, reminder_text, reminder_id, is_notification]
@@ -55,6 +64,10 @@ class ReminderScheduler:
             logging.info(f"Reminder scheduled for {reminder_time} (notification: {is_notification})")
         except Exception as e:
             logging.error(f"Error scheduling reminder: {e}")
+
+    def send_reminder_wrapper(self, user_id, reminder_text, reminder_id, is_notification=False):
+        """Обертка для асинхронной отправки напоминания"""
+        asyncio.run(self.send_reminder(user_id, reminder_text, reminder_id, is_notification))
 
     def add_notification(self, user_id, reminder_text, notify_time, reminder_id, is_notification=True):
         """Добавление уведомления заранее"""
@@ -70,9 +83,9 @@ class ReminderScheduler:
                 
                 # Помечаем как выполненное для одноразовых напоминаний
                 reminder = self.db.get_reminder(reminder_id)
-                if reminder and reminder[6] == 'once':  # repeat_type
+                if reminder and reminder[5] == 'once':  # repeat_type находится в 5-й позиции
                     self.db.update_reminder_status(reminder_id, 'completed')
-                elif reminder and reminder[6] != 'once':
+                elif reminder and reminder[5] != 'once':
                     # Для повторяющихся - создаем следующее напоминание
                     self.schedule_next_repetition(reminder_id, reminder)
             
@@ -85,13 +98,25 @@ class ReminderScheduler:
     def schedule_next_repetition(self, reminder_id, reminder):
         """Планирование следующего повторения"""
         try:
-            user_id, reminder_text, reminder_time, category, repeat_type, status, notify_before = reminder[1:8]
-            next_time = TimeParser.calculate_next_reminder(
-                datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S'), 
-                repeat_type
-            )
+            user_id, reminder_text, reminder_time_str, category, repeat_type, status = reminder[1:7]
+            
+            # Исправляем парсинг времени
+            try:
+                if '.' in reminder_time_str:
+                    reminder_time = datetime.strptime(reminder_time_str, '%Y-%m-%d %H:%M:%S.%f')
+                else:
+                    reminder_time = datetime.strptime(reminder_time_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError as e:
+                logging.error(f"Ошибка парсинга времени для повторения: {e}")
+                return
+            
+            next_time = TimeParser.calculate_next_reminder(reminder_time, repeat_type)
             
             if next_time:
+                # Получаем notify_before из базы
+                full_reminder = self.db.get_reminder(reminder_id)
+                notify_before = full_reminder[7] if len(full_reminder) > 7 else 0
+                
                 # Создаем новое напоминание для следующего повторения
                 new_reminder_id = self.db.add_reminder(
                     user_id, reminder_text, next_time, category, repeat_type, notify_before

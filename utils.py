@@ -3,6 +3,9 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import logging
 
+# Добавляем импорт Config
+from config import Config
+
 class TimeParser:
     @staticmethod
     def parse_time(time_text):
@@ -92,7 +95,19 @@ class TextFormatter:
             else:
                 status_icon = "⏳"
             
-            time_str = datetime.strptime(time, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y %H:%M')
+            # Исправляем парсинг времени с микросекундами
+            try:
+                if '.' in time:
+                    # Формат с микросекундами: 2025-09-29 19:55:23.191360
+                    time_obj = datetime.strptime(time, '%Y-%m-%d %H:%M:%S.%f')
+                else:
+                    # Формат без микросекунд: 2025-09-29 19:55:23
+                    time_obj = datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
+                time_str = time_obj.strftime('%d.%m.%Y %H:%M')
+            except ValueError as e:
+                logging.error(f"Ошибка форматирования времени {time}: {e}")
+                time_str = time  # Используем оригинальную строку при ошибке
+            
             category_icon = Config.CATEGORIES.get(category, '📌').split(' ')[0]
             repeat_text = f" ({Config.REPEAT_OPTIONS.get(repeat_type, '')})" if repeat_type != 'once' else ""
             
