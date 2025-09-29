@@ -249,7 +249,8 @@ class ImprovedReminderBot:
                 reply_markup=Keyboards.categories()
             )
             
-        except ValueError as e:
+        except Exception as e:  # Ловим ВСЕ исключения
+            logging.error(f"Error parsing time: {e}")
             await update.message.reply_text(
                 f"❌ Не могу понять время. Попробуй еще раз!\n"
                 f"Ошибка: {str(e)}\n\n"
@@ -375,7 +376,7 @@ class ImprovedReminderBot:
             )
         else:
             await update.message.reply_text(
-                "Нет активного диалога для отмены.",
+                "Нет активного диалога для отменаы.",
                 reply_markup=Keyboards.main_menu()
             )
 
@@ -428,7 +429,8 @@ class ImprovedReminderBot:
                     "Например: 'напомни позвонить маме через 2 часа'",
                     reply_markup=Keyboards.main_menu()
                 )
-        except ValueError as e:
+        except Exception as e:
+            logging.error(f"Error in quick reminder: {e}")
             await update.message.reply_text(
                 f"❌ Не могу понять время. Используй кнопку '📝 Создать напоминание' "
                 f"для полного процесса создания.",
