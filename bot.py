@@ -14,6 +14,25 @@ from scheduler import ReminderScheduler
 from keyboards import Keyboards
 from utils import TimeParser, TextFormatter
 
+import os
+from dotenv import load_dotenv
+
+# Загружаем .env файл
+load_dotenv()
+
+# Отладочная информация
+print("Current directory:", os.getcwd())
+print("Files in current directory:", os.listdir('.'))
+print("BOT_TOKEN exists:", os.getenv('BOT_TOKEN') is not None)
+print("BOT_TOKEN value:", '***' if os.getenv('BOT_TOKEN') else 'None')
+
+class ImprovedReminderBot:
+    def __init__(self):
+        self.token = os.getenv('BOT_TOKEN')
+        if not self.token:
+            raise ValueError("BOT_TOKEN environment variable is not set")
+        # остальной код...
+
 # Загрузка переменных окружения
 load_dotenv()
 
@@ -51,9 +70,9 @@ class ImprovedReminderBot:
             states={
                 SET_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_text)],
                 SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_time)],
-                SET_CATEGORY: [CallbackQueryHandler(self.process_reminder_category)],
-                SET_REPEAT: [CallbackQueryHandler(self.process_reminder_repeat)],
-                SET_NOTIFICATION: [CallbackQueryHandler(self.process_reminder_notification)],
+                SET_CATEGORY: [CallbackQueryHandler(self.process_conversation_callback)],
+                SET_REPEAT: [CallbackQueryHandler(self.process_conversation_callback)],
+                SET_NOTIFICATION: [CallbackQueryHandler(self.process_conversation_callback)],
             },
             fallbacks=[CommandHandler("cancel", self.cancel_creation)],
         )
@@ -189,19 +208,34 @@ class ImprovedReminderBot:
             )
             return SET_TIME
 
-    async def process_reminder_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора категории"""
+    async def process_conversation_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Универсальный обработчик callback для ConversationHandler"""
         query = update.callback_query
         await query.answer()
         
         data = query.data
+        current_state = context.user_data.get('conversation_state', SET_CATEGORY)
         
-        print(f"DEBUG: Received callback data in category: {data}")  # Отладка
+        print(f"DEBUG: Conversation callback - data: {data}, current_state: {current_state}")
         
+        # Обработка отмены
         if data == 'cancel':
             await query.edit_message_text("Создание напоминания отменено.")
             return ConversationHandler.END
         
+        # Обработка в зависимости от текущего состояния
+        if current_state == SET_CATEGORY:
+            return await self.handle_category_callback(query, context, data)
+        elif current_state == SET_REPEAT:
+            return await self.handle_repeat_callback(query, context, data)
+        elif current_state == SET_NOTIFICATION:
+            return await self.handle_notification_callback(query, context, data)
+        else:
+            await query.edit_message_text("❌ Ошибка состояния. Начни заново.")
+            return ConversationHandler.END
+
+    async def handle_category_callback(self, query, context, data):
+        """Обработка callback для выбора категории"""
         if data.startswith('category_'):
             category = data.replace('category_', '')
             context.user_data['category'] = category
@@ -211,31 +245,21 @@ class ImprovedReminderBot:
                      "🔄 Нужно ли повторять напоминание?",
                 reply_markup=Keyboards.repeat_options()
             )
+            context.user_data['conversation_state'] = SET_REPEAT
             return SET_REPEAT
-        
-        # Если callback не распознан - остаемся в текущем состоянии
-        await query.answer("Пожалуйста, выбери категорию из списка")
-        return SET_CATEGORY
+        else:
+            await query.answer("Пожалуйста, выбери категорию из списка")
+            return SET_CATEGORY
 
-    async def process_reminder_repeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора повторения"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        print(f"DEBUG: Received callback data in repeat: {data}")  # Отладка
-        
-        if data == 'cancel':
-            await query.edit_message_text("Создание напоминания отменено.")
-            return ConversationHandler.END
-        
+    async def handle_repeat_callback(self, query, context, data):
+        """Обработка callback для выбора повторения"""
         if data.startswith('repeat_'):
             repeat_type = data.replace('repeat_', '')
             context.user_data['repeat_type'] = repeat_type
             
             # Для одноразовых - сразу сохраняем
             if repeat_type == 'once':
+                context.user_data['notify_before'] = 0
                 return await self.finish_reminder_creation(query, context)
             
             # Для повторяющихся - спрашиваем про уведомление
@@ -256,36 +280,24 @@ class ImprovedReminderBot:
                      "🔔 Уведомить заранее?",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            context.user_data['conversation_state'] = SET_NOTIFICATION
             return SET_NOTIFICATION
-        
-        # Если callback не распознан
-        await query.answer("Пожалуйста, выбери тип повторения из списка")
-        return SET_REPEAT
+        else:
+            await query.answer("Пожалуйста, выбери тип повторения из списка")
+            return SET_REPEAT
 
-    async def process_reminder_notification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора уведомления"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        print(f"DEBUG: Received callback data in notification: {data}")  # Отладка
-        
-        if data == 'cancel':
-            await query.edit_message_text("Создание напоминания отменено.")
-            return ConversationHandler.END
-        
+    async def handle_notification_callback(self, query, context, data):
+        """Обработка callback для выбора уведомления"""
         if data.startswith('notify_'):
             notify_before = int(data.replace('notify_', ''))
             context.user_data['notify_before'] = notify_before
             
             return await self.finish_reminder_creation(query, context)
-        
-        # Если callback не распознан
-        await query.answer("Пожалуйста, выбери вариант уведомления")
-        return SET_NOTIFICATION
+        else:
+            await query.answer("Пожалуйста, выбери вариант уведомления")
+            return SET_NOTIFICATION
 
-    async def finish_reminder_creation(self, query, context: ContextTypes.DEFAULT_TYPE):
+    async def finish_reminder_creation(self, query, context):
         """Завершение создания напоминания"""
         user_id = query.from_user.id
         reminder_text = context.user_data.get('reminder_text', '')
@@ -331,10 +343,18 @@ class ImprovedReminderBot:
             parse_mode='Markdown'
         )
         
+        # Очищаем состояние
+        if 'conversation_state' in context.user_data:
+            del context.user_data['conversation_state']
+        
         return ConversationHandler.END
 
     async def cancel_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Отмена создания напоминания"""
+        # Очищаем состояние
+        if 'conversation_state' in context.user_data:
+            del context.user_data['conversation_state']
+            
         await update.message.reply_text(
             "Создание напоминания отменено.",
             reply_markup=Keyboards.main_menu()
@@ -350,7 +370,7 @@ class ImprovedReminderBot:
         
         data = query.data
         
-        print(f"DEBUG: Received general callback: {data}")  # Отладка
+        print(f"DEBUG: General callback received: {data}")
         
         try:
             if data == 'back_to_list':
@@ -382,7 +402,8 @@ class ImprovedReminderBot:
             elif data == 'cancel':
                 await query.edit_message_text("Операция отменена.")
             else:
-                # Если callback не распознан в общем обработчике, возможно он для ConversationHandler
+                # Если callback не распознан в общем обработчике
+                print(f"DEBUG: Unhandled callback in general handler: {data}")
                 await query.answer("Команда не распознана")
                 
         except Exception as e:
