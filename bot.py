@@ -42,34 +42,35 @@ class ImprovedReminderBot:
 
     def register_handlers(self):
         """Регистрация всех обработчиков команд"""
-        # Обработчик для создания напоминаний (должен быть ПЕРВЫМ!)
-        reminder_conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler("remind", self.remind_command),
-                MessageHandler(filters.Regex('^(📝 Создать напоминание)$'), self.remind_command)
-            ],
-            states={
-                SET_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_reminder_text)],
-                SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.set_reminder_time)],
-                SET_CATEGORY: [CallbackQueryHandler(self.set_reminder_category, pattern='^(category_|cancel)$')],
-                SET_REPEAT: [CallbackQueryHandler(self.set_reminder_repeat, pattern='^(repeat_|cancel)$')],
-                SET_NOTIFICATION: [CallbackQueryHandler(self.set_reminder_notification, pattern='^(notify_|cancel)$')],
-            },
-            fallbacks=[CommandHandler("cancel", self.cancel_command)],
-        )
-        
-        self.application.add_handler(reminder_conv_handler)
-        
-        # Обработчики кнопок для остальных функций
-        self.application.add_handler(CallbackQueryHandler(self.general_button_handler))
-        
-        # Основные команды
+        # Сначала общие обработчики команд
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("my_reminders", self.my_reminders_command))
+        self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         
-        # Обработчики сообщений (должен быть ПОСЛЕДНИМ)
+        # Обработчики кнопок для общих функций
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback, pattern="^(back_to_list|create_new|show_stats|complete_|delete_|edit_|notify15_|back_to_reminder_)"))
+        
+        # ConversationHandler для создания напоминаний
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CommandHandler("remind", self.start_reminder_creation),
+                MessageHandler(filters.Regex('^(📝 Создать напоминание)$'), self.start_reminder_creation)
+            ],
+            states={
+                SET_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_text)],
+                SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_time)],
+                SET_CATEGORY: [CallbackQueryHandler(self.process_reminder_category, pattern="^(category_|cancel)$")],
+                SET_REPEAT: [CallbackQueryHandler(self.process_reminder_repeat, pattern="^(repeat_|cancel)$")],
+                SET_NOTIFICATION: [CallbackQueryHandler(self.process_reminder_notification, pattern="^(notify_|cancel)$")],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel_creation)],
+        )
+        
+        self.application.add_handler(conv_handler)
+        
+        # Общий обработчик сообщений (последний)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,8 +144,9 @@ class ImprovedReminderBot:
         """Показать напоминания пользователя"""
         await self.show_reminders_list(update)
 
-    # Conversation Handlers
-    async def remind_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ===== CONVERSATION HANDLER METHODS =====
+
+    async def start_reminder_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Начало создания напоминания"""
         context.user_data.clear()
         await update.message.reply_text(
@@ -152,8 +154,8 @@ class ImprovedReminderBot:
         )
         return SET_REMINDER
 
-    async def set_reminder_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Установка текста напоминания"""
+    async def process_reminder_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текста напоминания"""
         context.user_data['reminder_text'] = update.message.text
         await update.message.reply_text(
             "⏰ Когда напомнить? \n\n"
@@ -165,8 +167,8 @@ class ImprovedReminderBot:
         )
         return SET_TIME
 
-    async def set_reminder_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Установка времени напоминания"""
+    async def process_reminder_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка времени напоминания"""
         time_text = update.message.text
         
         try:
@@ -187,79 +189,98 @@ class ImprovedReminderBot:
             )
             return SET_TIME
 
-    async def set_reminder_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def process_reminder_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка выбора категории"""
         query = update.callback_query
         await query.answer()
         
-        if query.data == 'cancel':
+        data = query.data
+        
+        if data == 'cancel':
             await query.edit_message_text("Создание напоминания отменено.")
             return ConversationHandler.END
         
-        category = query.data.replace('category_', '')
-        context.user_data['category'] = category
+        if data.startswith('category_'):
+            category = data.replace('category_', '')
+            context.user_data['category'] = category
+            
+            await query.edit_message_text(
+                text=f"📂 Категория: {Config.CATEGORIES.get(category, 'Другое')}\n\n"
+                     "🔄 Нужно ли повторять напоминание?",
+                reply_markup=Keyboards.repeat_options()
+            )
+            return SET_REPEAT
         
-        await query.edit_message_text(
-            text=f"📂 Категория: {Config.CATEGORIES.get(category, 'Другое')}\n\n"
-                 "🔄 Нужно ли повторять напоминание?",
-            reply_markup=Keyboards.repeat_options()
-        )
-        return SET_REPEAT
+        # Если callback не распознан, остаемся в текущем состоянии
+        await query.answer("Пожалуйста, выбери категорию из списка")
+        return SET_CATEGORY
 
-    async def set_reminder_repeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def process_reminder_repeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка выбора повторения"""
         query = update.callback_query
         await query.answer()
         
-        if query.data == 'cancel':
+        data = query.data
+        
+        if data == 'cancel':
             await query.edit_message_text("Создание напоминания отменено.")
             return ConversationHandler.END
         
-        repeat_type = query.data.replace('repeat_', '')
-        context.user_data['repeat_type'] = repeat_type
+        if data.startswith('repeat_'):
+            repeat_type = data.replace('repeat_', '')
+            context.user_data['repeat_type'] = repeat_type
+            
+            # Для одноразовых - сразу сохраняем
+            if repeat_type == 'once':
+                return await self.finish_reminder_creation(query, context)
+            
+            # Для повторяющихся - спрашиваем про уведомление
+            keyboard = [
+                [
+                    InlineKeyboardButton("За 15 минут", callback_data="notify_15"),
+                    InlineKeyboardButton("За 30 минут", callback_data="notify_30")
+                ],
+                [
+                    InlineKeyboardButton("За 60 минут", callback_data="notify_60"),
+                    InlineKeyboardButton("Не уведомлять", callback_data="notify_0")
+                ],
+                [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+            ]
+            
+            await query.edit_message_text(
+                text=f"🔄 Повтор: {Config.REPEAT_OPTIONS.get(repeat_type, '')}\n\n"
+                     "🔔 Уведомить заранее?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return SET_NOTIFICATION
         
-        # Для одноразовых - сразу сохраняем
-        if repeat_type == 'once':
-            return await self.save_reminder(update, context)
-        
-        # Для повторяющихся - спрашиваем про уведомление
-        keyboard = [
-            [
-                InlineKeyboardButton("За 15 минут", callback_data="notify_15"),
-                InlineKeyboardButton("За 30 минут", callback_data="notify_30")
-            ],
-            [
-                InlineKeyboardButton("За 60 минут", callback_data="notify_60"),
-                InlineKeyboardButton("Не уведомлять", callback_data="notify_0")
-            ],
-            [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
-        ]
-        
-        await query.edit_message_text(
-            text=f"🔄 Повтор: {Config.REPEAT_OPTIONS.get(repeat_type, '')}\n\n"
-                 "🔔 Уведомить заранее?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return SET_NOTIFICATION
+        # Если callback не распознан, остаемся в текущем состоянии
+        await query.answer("Пожалуйста, выбери тип повторения из списка")
+        return SET_REPEAT
 
-    async def set_reminder_notification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def process_reminder_notification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка выбора уведомления"""
         query = update.callback_query
         await query.answer()
         
-        if query.data == 'cancel':
+        data = query.data
+        
+        if data == 'cancel':
             await query.edit_message_text("Создание напоминания отменено.")
             return ConversationHandler.END
         
-        notify_before = int(query.data.replace('notify_', ''))
-        context.user_data['notify_before'] = notify_before
+        if data.startswith('notify_'):
+            notify_before = int(data.replace('notify_', ''))
+            context.user_data['notify_before'] = notify_before
+            
+            return await self.finish_reminder_creation(query, context)
         
-        return await self.save_reminder(update, context)
+        # Если callback не распознан, остаемся в текущем состоянии
+        await query.answer("Пожалуйста, выбери вариант уведомления")
+        return SET_NOTIFICATION
 
-    async def save_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Сохранение напоминания и завершение диалога"""
-        query = update.callback_query
-        
+    async def finish_reminder_creation(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Завершение создания напоминания"""
         user_id = query.from_user.id
         reminder_text = context.user_data['reminder_text']
         reminder_time = context.user_data['reminder_time']
@@ -302,8 +323,18 @@ class ImprovedReminderBot:
         
         return ConversationHandler.END
 
-    async def general_button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка нажатий на inline кнопки для общих функций"""
+    async def cancel_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Отмена создания напоминания"""
+        await update.message.reply_text(
+            "Создание напоминания отменено.",
+            reply_markup=Keyboards.main_menu()
+        )
+        return ConversationHandler.END
+
+    # ===== GENERAL CALLBACK HANDLER =====
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка callback запросов для общих функций"""
         query = update.callback_query
         await query.answer()
         
@@ -337,15 +368,104 @@ class ImprovedReminderBot:
                 reminder_id = int(data.replace('back_to_reminder_', ''))
                 await self.show_reminder_details(query, reminder_id)
             else:
-                # Если callback не распознан, пробуем обработать как часть ConversationHandler
-                if data.startswith(('category_', 'repeat_', 'notify_')):
-                    await query.edit_message_text("❌ Ошибка: диалог прерван. Начни заново.")
-                else:
-                    await query.edit_message_text("❌ Неизвестная команда")
+                await query.edit_message_text("❌ Неизвестная команда")
                 
         except Exception as e:
-            logging.error(f"Error in button handler: {e}")
+            logging.error(f"Error in callback handler: {e}")
             await query.edit_message_text("❌ Произошла ошибка. Попробуй еще раз.")
+
+    # ===== GENERAL MESSAGE HANDLER =====
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка обычных сообщений"""
+        text = update.message.text
+        
+        if text == '📋 Мои напоминания':
+            await self.show_reminders_list(update)
+        elif text == '📊 Статистика':
+            await self.stats_command(update, context)
+        elif text == 'ℹ️ Помощь':
+            await self.help_command(update, context)
+        elif text == '📝 Создать напоминание':
+            await self.start_reminder_creation(update, context)
+        elif text == '🔄 Повторяющиеся':
+            await update.message.reply_text(
+                "🔄 Для создания повторяющихся напоминаний используй кнопку \"📝 Создать напоминание\" "
+                "и выбери нужный тип повторения в процессе создания.",
+                reply_markup=Keyboards.main_menu()
+            )
+        elif text.lower().startswith('напомни'):
+            await self.quick_reminder(update, text)
+        else:
+            await update.message.reply_text(
+                "Используй кнопки меню или напиши /help для помощи",
+                reply_markup=Keyboards.main_menu()
+            )
+
+    # ===== UTILITY METHODS =====
+
+    async def show_reminders_list(self, update: Update):
+        """Показать список напоминаний"""
+        user_id = update.message.from_user.id
+        reminders = self.db.get_user_reminders(user_id, status='active')
+        
+        if not reminders:
+            await update.message.reply_text(
+                "📭 У тебя пока нет активных напоминаний.",
+                reply_markup=Keyboards.main_menu()
+            )
+            return
+        
+        reminders_text = TextFormatter.format_reminder_list(reminders)
+        
+        # Если текст слишком длинный, разбиваем на части
+        if len(reminders_text) > 4000:
+            parts = [reminders_text[i:i+4000] for i in range(0, len(reminders_text), 4000)]
+            for part in parts:
+                await update.message.reply_text(part, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(reminders_text, parse_mode='Markdown')
+
+    async def quick_reminder(self, update: Update, text: str):
+        """Быстрое создание напоминания из текста"""
+        try:
+            if " через " in text:
+                parts = text.split(" через ")
+                reminder_text = parts[0].replace("напомни", "").strip()
+                time_part = "через " + parts[1]
+                
+                reminder_time = TimeParser.parse_time(time_part)
+                user_id = update.message.from_user.id
+                
+                reminder_id = self.db.add_reminder(user_id, reminder_text, reminder_time)
+                self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
+                
+                await update.message.reply_text(
+                    f"✅ Готово! Напомню: '{reminder_text}' "
+                    f"{reminder_time.strftime('%d.%m.%Y в %H:%M')}",
+                    reply_markup=Keyboards.main_menu()
+                )
+            else:
+                await update.message.reply_text(
+                    "Напиши в формате: 'напомни [текст] через [время]'\n"
+                    "Например: 'напомни позвонить маме через 2 часа'",
+                    reply_markup=Keyboards.main_menu()
+                )
+        except ValueError as e:
+            await update.message.reply_text(
+                f"❌ Не могу понять время. Используй кнопку '📝 Создать напоминание' "
+                f"для полного процесса создания.",
+                reply_markup=Keyboards.main_menu()
+            )
+
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Общая команда отмены"""
+        await update.message.reply_text(
+            "Нет активного диалога для отмены.",
+            reply_markup=Keyboards.main_menu()
+        )
+
+    # ===== REMINDER MANAGEMENT METHODS =====
 
     async def show_user_reminders(self, query):
         """Показать напоминания пользователя"""
@@ -455,94 +575,6 @@ class ImprovedReminderBot:
                 [InlineKeyboardButton("📋 Назад к напоминанию", callback_data=f"back_to_reminder_{reminder_id}")]
             ])
         )
-
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка обычных сообщений"""
-        text = update.message.text
-        
-        if text == '📋 Мои напоминания':
-            await self.show_reminders_list(update)
-        elif text == '📊 Статистика':
-            await self.stats_command(update, context)
-        elif text == 'ℹ️ Помощь':
-            await self.help_command(update, context)
-        elif text == '📝 Создать напоминание':
-            await self.remind_command(update, context)
-        elif text == '🔄 Повторяющиеся':
-            await update.message.reply_text(
-                "🔄 Для создания повторяющихся напоминаний используй кнопку \"📝 Создать напоминание\" "
-                "и выбери нужный тип повторения в процессе создания.",
-                reply_markup=Keyboards.main_menu()
-            )
-        elif text.lower().startswith('напомни'):
-            await self.quick_reminder(update, text)
-        else:
-            await update.message.reply_text(
-                "Используй кнопки меню или напиши /help для помощи",
-                reply_markup=Keyboards.main_menu()
-            )
-
-    async def show_reminders_list(self, update: Update):
-        """Показать список напоминаний"""
-        user_id = update.message.from_user.id
-        reminders = self.db.get_user_reminders(user_id, status='active')
-        
-        if not reminders:
-            await update.message.reply_text(
-                "📭 У тебя пока нет активных напоминаний.",
-                reply_markup=Keyboards.main_menu()
-            )
-            return
-        
-        reminders_text = TextFormatter.format_reminder_list(reminders)
-        
-        # Если текст слишком длинный, разбиваем на части
-        if len(reminders_text) > 4000:
-            parts = [reminders_text[i:i+4000] for i in range(0, len(reminders_text), 4000)]
-            for part in parts:
-                await update.message.reply_text(part, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(reminders_text, parse_mode='Markdown')
-
-    async def quick_reminder(self, update: Update, text: str):
-        """Быстрое создание напоминания из текста"""
-        try:
-            if " через " in text:
-                parts = text.split(" через ")
-                reminder_text = parts[0].replace("напомни", "").strip()
-                time_part = "через " + parts[1]
-                
-                reminder_time = TimeParser.parse_time(time_part)
-                user_id = update.message.from_user.id
-                
-                reminder_id = self.db.add_reminder(user_id, reminder_text, reminder_time)
-                self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
-                
-                await update.message.reply_text(
-                    f"✅ Готово! Напомню: '{reminder_text}' "
-                    f"{reminder_time.strftime('%d.%m.%Y в %H:%M')}",
-                    reply_markup=Keyboards.main_menu()
-                )
-            else:
-                await update.message.reply_text(
-                    "Напиши в формате: 'напомни [текст] через [время]'\n"
-                    "Например: 'напомни позвонить маме через 2 часа'",
-                    reply_markup=Keyboards.main_menu()
-                )
-        except ValueError as e:
-            await update.message.reply_text(
-                f"❌ Не могу понять время. Используй кнопку '📝 Создать напоминание' "
-                f"для полного процесса создания.",
-                reply_markup=Keyboards.main_menu()
-            )
-
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отмена создания напоминания"""
-        await update.message.reply_text(
-            "Создание напоминания отменено.",
-            reply_markup=Keyboards.main_menu()
-        )
-        return ConversationHandler.END
 
     def run(self):
         """Запуск бота"""
