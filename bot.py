@@ -45,6 +45,7 @@ class ImprovedReminderBot:
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("my_reminders", self.my_reminders_command))
         self.application.add_handler(CommandHandler("cancel", self.cancel_command))
+        self.application.add_handler(CommandHandler("debug", self.debug_reminders))
         
         # Обработчик всех callback
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
@@ -553,6 +554,32 @@ class ImprovedReminderBot:
                 [InlineKeyboardButton("📋 Назад к напоминанию", callback_data=f"back_to_reminder_{reminder_id}")]
             ])
         )
+
+async def debug_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Временный метод для отладки"""
+    user_id = update.message.from_user.id
+    print(f"DEBUG: User ID: {user_id}")
+    
+    # Проверим все напоминания пользователя
+    reminders = self.db.get_user_reminders(user_id)
+    print(f"DEBUG: All reminders: {reminders}")
+    
+    # Проверим активные напоминания
+    active_reminders = self.db.get_user_reminders(user_id, status='active')
+    print(f"DEBUG: Active reminders: {active_reminders}")
+    
+    # Проверим базу данных напрямую
+    conn = sqlite3.connect('reminders.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM reminders WHERE user_id = ?', (user_id,))
+    all_records = cursor.fetchall()
+    print(f"DEBUG: Raw DB records: {all_records}")
+    conn.close()
+    
+    await update.message.reply_text(
+        f"Отладка: найдено {len(active_reminders)} активных напоминаний",
+        reply_markup=Keyboards.main_menu()
+    )
 
     def run(self):
         """Запуск бота"""
