@@ -190,12 +190,6 @@ class ImprovedReminderBot:
             await self.help_command(update, context)
         elif text == '📝 Создать напоминание':
             await self.start_reminder_creation(update, context)
-        elif text == '🔄 Повторяющиеся':
-            await update.message.reply_text(
-                "🔄 Для создания повторяющихся напоминаний используй кнопку \"📝 Создать напоминание\" "
-                "и выбери нужный тип повторения в процессе создания.",
-                reply_markup=Keyboards.main_menu()
-            )
         elif text.lower().startswith('напомни'):
             await self.quick_reminder(update, text)
         else:
