@@ -129,6 +129,20 @@ class ImprovedReminderBot:
         """Показать напоминания пользователя"""
         await self.show_reminders_list(update)
 
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /cancel"""
+        if context.user_data.get('reminder_state'):
+            context.user_data.clear()
+            await update.message.reply_text(
+                "Создание напоминания отменено.",
+                reply_markup=Keyboards.main_menu()
+            )
+        else:
+            await update.message.reply_text(
+                "Нет активного диалога для отмены.",
+                reply_markup=Keyboards.main_menu()
+            )
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка обычных сообщений"""
         text = update.message.text
@@ -255,7 +269,7 @@ class ImprovedReminderBot:
                 reply_markup=Keyboards.categories()
             )
             
-        except Exception as e:  # Ловим ВСЕ исключения
+        except Exception as e:
             logging.error(f"Error parsing time: {e}")
             await update.message.reply_text(
                 f"❌ Не могу понять время. Попробуй еще раз!\n"
@@ -325,7 +339,6 @@ class ImprovedReminderBot:
         
         if not reminder_text or not reminder_time:
             await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
-            # Очищаем состояние
             context.user_data.clear()
             return
         
@@ -371,20 +384,6 @@ class ImprovedReminderBot:
         await query.edit_message_text(
             "Создание напоминания отменено."
         )
-
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Общая команда отмены"""
-        if context.user_data.get('reminder_state'):
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Создание напоминания отменено.",
-                reply_markup=Keyboards.main_menu()
-            )
-        else:
-            await update.message.reply_text(
-                "Нет активного диалога для отмены.",
-                reply_markup=Keyboards.main_menu()
-            )
 
     # ===== UTILITY METHODS =====
 
