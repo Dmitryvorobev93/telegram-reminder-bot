@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    filters, ContextTypes, ConversationHandler
+    filters, ContextTypes
 )
 
 from config import Config
@@ -13,25 +13,6 @@ from database import Database
 from scheduler import ReminderScheduler
 from keyboards import Keyboards
 from utils import TimeParser, TextFormatter
-
-import os
-from dotenv import load_dotenv
-
-# Загружаем .env файл
-load_dotenv()
-
-# Отладочная информация
-print("Current directory:", os.getcwd())
-print("Files in current directory:", os.listdir('.'))
-print("BOT_TOKEN exists:", os.getenv('BOT_TOKEN') is not None)
-print("BOT_TOKEN value:", '***' if os.getenv('BOT_TOKEN') else 'None')
-
-class ImprovedReminderBot:
-    def __init__(self):
-        self.token = os.getenv('BOT_TOKEN')
-        if not self.token:
-            raise ValueError("BOT_TOKEN environment variable is not set")
-        # остальной код...
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -46,9 +27,6 @@ logging.basicConfig(
     ]
 )
 
-# Состояния для ConversationHandler
-SET_REMINDER, SET_TIME, SET_CATEGORY, SET_REPEAT, SET_NOTIFICATION = range(5)
-
 class ImprovedReminderBot:
     def __init__(self):
         self.token = Config.BOT_TOKEN
@@ -61,27 +39,6 @@ class ImprovedReminderBot:
 
     def register_handlers(self):
         """Регистрация всех обработчиков команд"""
-        # ConversationHandler ДОЛЖЕН БЫТЬ ПЕРВЫМ!
-        conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler("remind", self.start_reminder_creation),
-                MessageHandler(filters.Regex('^(📝 Создать напоминание)$'), self.start_reminder_creation)
-            ],
-            states={
-                SET_REMINDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_text)],
-                SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_reminder_time)],
-                SET_CATEGORY: [CallbackQueryHandler(self.process_conversation_callback)],
-                SET_REPEAT: [CallbackQueryHandler(self.process_conversation_callback)],
-                SET_NOTIFICATION: [CallbackQueryHandler(self.process_conversation_callback)],
-            },
-            fallbacks=[CommandHandler("cancel", self.cancel_creation)],
-        )
-        
-        self.application.add_handler(conv_handler)
-        
-        # Обработчики кнопок для общих функций
-        self.application.add_handler(CallbackQueryHandler(self.handle_general_callback))
-        
         # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
@@ -89,7 +46,10 @@ class ImprovedReminderBot:
         self.application.add_handler(CommandHandler("my_reminders", self.my_reminders_command))
         self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         
-        # Общий обработчик сообщений (последний)
+        # Обработчик всех callback
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback))
+        
+        # Обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -163,19 +123,109 @@ class ImprovedReminderBot:
         """Показать напоминания пользователя"""
         await self.show_reminders_list(update)
 
-    # ===== CONVERSATION HANDLER METHODS =====
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка обычных сообщений"""
+        text = update.message.text
+        
+        # Проверяем, находится ли пользователь в процессе создания напоминания
+        user_state = context.user_data.get('reminder_state')
+        
+        if user_state == 'waiting_text':
+            await self.process_reminder_text(update, context)
+        elif user_state == 'waiting_time':
+            await self.process_reminder_time(update, context)
+        elif text == '📋 Мои напоминания':
+            await self.show_reminders_list(update)
+        elif text == '📊 Статистика':
+            await self.stats_command(update, context)
+        elif text == 'ℹ️ Помощь':
+            await self.help_command(update, context)
+        elif text == '📝 Создать напоминание':
+            await self.start_reminder_creation(update, context)
+        elif text == '🔄 Повторяющиеся':
+            await update.message.reply_text(
+                "🔄 Для создания повторяющихся напоминаний используй кнопку \"📝 Создать напоминание\" "
+                "и выбери нужный тип повторения в процессе создания.",
+                reply_markup=Keyboards.main_menu()
+            )
+        elif text.lower().startswith('напомни'):
+            await self.quick_reminder(update, text)
+        else:
+            await update.message.reply_text(
+                "Используй кнопки меню или напиши /help для помощи",
+                reply_markup=Keyboards.main_menu()
+            )
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик всех callback запросов"""
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        
+        print(f"DEBUG: Callback received: {data}")
+        
+        try:
+            # Обработка создания напоминания
+            if data.startswith('category_'):
+                await self.process_category_callback(query, context, data)
+            elif data.startswith('repeat_'):
+                await self.process_repeat_callback(query, context, data)
+            elif data.startswith('notify_'):
+                await self.process_notification_callback(query, context, data)
+            elif data == 'cancel':
+                await self.cancel_creation(query, context)
+            
+            # Обработка управления напоминаниями
+            elif data == 'back_to_list':
+                await self.show_user_reminders(query)
+            elif data == 'create_new':
+                await query.edit_message_text(
+                    "Используй кнопку \"📝 Создать напоминание\" в главном меню"
+                )
+            elif data == 'show_stats':
+                user_id = query.from_user.id
+                stats = self.db.get_user_stats(user_id)
+                stats_text = TextFormatter.format_stats(stats)
+                await query.edit_message_text(stats_text, parse_mode='Markdown')
+            elif data.startswith('complete_'):
+                reminder_id = int(data.replace('complete_', ''))
+                await self.complete_reminder(query, reminder_id)
+            elif data.startswith('delete_'):
+                reminder_id = int(data.replace('delete_', ''))
+                await self.delete_reminder(query, reminder_id)
+            elif data.startswith('edit_'):
+                reminder_id = int(data.replace('edit_', ''))
+                await self.show_edit_options(query, reminder_id)
+            elif data.startswith('notify15_'):
+                reminder_id = int(data.replace('notify15_', ''))
+                await self.add_notification(query, reminder_id, 15)
+            elif data.startswith('back_to_reminder_'):
+                reminder_id = int(data.replace('back_to_reminder_', ''))
+                await self.show_reminder_details(query, reminder_id)
+            else:
+                await query.edit_message_text("❌ Неизвестная команда")
+                
+        except Exception as e:
+            logging.error(f"Error in callback handler: {e}")
+            await query.edit_message_text("❌ Произошла ошибка. Попробуй еще раз.")
+
+    # ===== REMINDER CREATION METHODS =====
 
     async def start_reminder_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Начало создания напоминания"""
         context.user_data.clear()
+        context.user_data['reminder_state'] = 'waiting_text'
+        
         await update.message.reply_text(
             "📝 О чем тебе напомнить? Напиши текст напоминания:"
         )
-        return SET_REMINDER
 
     async def process_reminder_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка текста напоминания"""
         context.user_data['reminder_text'] = update.message.text
+        context.user_data['reminder_state'] = 'waiting_time'
+        
         await update.message.reply_text(
             "⏰ Когда напомнить? \n\n"
             "Примеры:\n"
@@ -184,7 +234,6 @@ class ImprovedReminderBot:
             "• через 30 минут\n"
             "• 25.12.2024 в 10:00"
         )
-        return SET_TIME
 
     async def process_reminder_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка времени напоминания"""
@@ -193,12 +242,12 @@ class ImprovedReminderBot:
         try:
             reminder_time = TimeParser.parse_time(time_text)
             context.user_data['reminder_time'] = reminder_time
+            context.user_data['reminder_state'] = 'waiting_category'
             
             await update.message.reply_text(
                 "📂 Выбери категорию:",
                 reply_markup=Keyboards.categories()
             )
-            return SET_CATEGORY
             
         except ValueError as e:
             await update.message.reply_text(
@@ -206,96 +255,57 @@ class ImprovedReminderBot:
                 f"Ошибка: {str(e)}\n\n"
                 f"Пример правильного формата: 'через 2 часа' или 'завтра в 15:00'"
             )
-            return SET_TIME
 
-    async def process_conversation_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Универсальный обработчик callback для ConversationHandler"""
-        query = update.callback_query
-        await query.answer()
+    async def process_category_callback(self, query, context, data):
+        """Обработка выбора категории"""
+        category = data.replace('category_', '')
+        context.user_data['category'] = category
+        context.user_data['reminder_state'] = 'waiting_repeat'
         
-        data = query.data
-        current_state = context.user_data.get('conversation_state', SET_CATEGORY)
-        
-        print(f"DEBUG: Conversation callback - data: {data}, current_state: {current_state}")
-        
-        # Обработка отмены
-        if data == 'cancel':
-            await query.edit_message_text("Создание напоминания отменено.")
-            return ConversationHandler.END
-        
-        # Обработка в зависимости от текущего состояния
-        if current_state == SET_CATEGORY:
-            return await self.handle_category_callback(query, context, data)
-        elif current_state == SET_REPEAT:
-            return await self.handle_repeat_callback(query, context, data)
-        elif current_state == SET_NOTIFICATION:
-            return await self.handle_notification_callback(query, context, data)
-        else:
-            await query.edit_message_text("❌ Ошибка состояния. Начни заново.")
-            return ConversationHandler.END
+        await query.edit_message_text(
+            text=f"📂 Категория: {Config.CATEGORIES.get(category, 'Другое')}\n\n"
+                 "🔄 Нужно ли повторять напоминание?",
+            reply_markup=Keyboards.repeat_options()
+        )
 
-    async def handle_category_callback(self, query, context, data):
-        """Обработка callback для выбора категории"""
-        if data.startswith('category_'):
-            category = data.replace('category_', '')
-            context.user_data['category'] = category
-            
-            await query.edit_message_text(
-                text=f"📂 Категория: {Config.CATEGORIES.get(category, 'Другое')}\n\n"
-                     "🔄 Нужно ли повторять напоминание?",
-                reply_markup=Keyboards.repeat_options()
-            )
-            context.user_data['conversation_state'] = SET_REPEAT
-            return SET_REPEAT
-        else:
-            await query.answer("Пожалуйста, выбери категорию из списка")
-            return SET_CATEGORY
+    async def process_repeat_callback(self, query, context, data):
+        """Обработка выбора повторения"""
+        repeat_type = data.replace('repeat_', '')
+        context.user_data['repeat_type'] = repeat_type
+        
+        # Для одноразовых - сразу сохраняем
+        if repeat_type == 'once':
+            context.user_data['notify_before'] = 0
+            await self.finish_reminder_creation(query, context)
+            return
+        
+        # Для повторяющихся - спрашиваем про уведомление
+        context.user_data['reminder_state'] = 'waiting_notification'
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("За 15 минут", callback_data="notify_15"),
+                InlineKeyboardButton("За 30 минут", callback_data="notify_30")
+            ],
+            [
+                InlineKeyboardButton("За 60 минут", callback_data="notify_60"),
+                InlineKeyboardButton("Не уведомлять", callback_data="notify_0")
+            ],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+        ]
+        
+        await query.edit_message_text(
+            text=f"🔄 Повтор: {Config.REPEAT_OPTIONS.get(repeat_type, '')}\n\n"
+                 "🔔 Уведомить заранее?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-    async def handle_repeat_callback(self, query, context, data):
-        """Обработка callback для выбора повторения"""
-        if data.startswith('repeat_'):
-            repeat_type = data.replace('repeat_', '')
-            context.user_data['repeat_type'] = repeat_type
-            
-            # Для одноразовых - сразу сохраняем
-            if repeat_type == 'once':
-                context.user_data['notify_before'] = 0
-                return await self.finish_reminder_creation(query, context)
-            
-            # Для повторяющихся - спрашиваем про уведомление
-            keyboard = [
-                [
-                    InlineKeyboardButton("За 15 минут", callback_data="notify_15"),
-                    InlineKeyboardButton("За 30 минут", callback_data="notify_30")
-                ],
-                [
-                    InlineKeyboardButton("За 60 минут", callback_data="notify_60"),
-                    InlineKeyboardButton("Не уведомлять", callback_data="notify_0")
-                ],
-                [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
-            ]
-            
-            await query.edit_message_text(
-                text=f"🔄 Повтор: {Config.REPEAT_OPTIONS.get(repeat_type, '')}\n\n"
-                     "🔔 Уведомить заранее?",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            context.user_data['conversation_state'] = SET_NOTIFICATION
-            return SET_NOTIFICATION
-        else:
-            await query.answer("Пожалуйста, выбери тип повторения из списка")
-            return SET_REPEAT
-
-    async def handle_notification_callback(self, query, context, data):
-        """Обработка callback для выбора уведомления"""
-        if data.startswith('notify_'):
-            notify_before = int(data.replace('notify_', ''))
-            context.user_data['notify_before'] = notify_before
-            
-            return await self.finish_reminder_creation(query, context)
-        else:
-            await query.answer("Пожалуйста, выбери вариант уведомления")
-            return SET_NOTIFICATION
+    async def process_notification_callback(self, query, context, data):
+        """Обработка выбора уведомления"""
+        notify_before = int(data.replace('notify_', ''))
+        context.user_data['notify_before'] = notify_before
+        
+        await self.finish_reminder_creation(query, context)
 
     async def finish_reminder_creation(self, query, context):
         """Завершение создания напоминания"""
@@ -308,7 +318,9 @@ class ImprovedReminderBot:
         
         if not reminder_text or not reminder_time:
             await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
-            return ConversationHandler.END
+            # Очищаем состояние
+            context.user_data.clear()
+            return
         
         # Сохраняем в базу
         reminder_id = self.db.add_reminder(
@@ -344,97 +356,26 @@ class ImprovedReminderBot:
         )
         
         # Очищаем состояние
-        if 'conversation_state' in context.user_data:
-            del context.user_data['conversation_state']
-        
-        return ConversationHandler.END
+        context.user_data.clear()
 
-    async def cancel_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cancel_creation(self, query, context):
         """Отмена создания напоминания"""
-        # Очищаем состояние
-        if 'conversation_state' in context.user_data:
-            del context.user_data['conversation_state']
-            
-        await update.message.reply_text(
-            "Создание напоминания отменено.",
-            reply_markup=Keyboards.main_menu()
+        context.user_data.clear()
+        await query.edit_message_text(
+            "Создание напоминания отменено."
         )
-        return ConversationHandler.END
 
-    # ===== GENERAL CALLBACK HANDLER =====
-
-    async def handle_general_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка callback запросов для общих функций"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        
-        print(f"DEBUG: General callback received: {data}")
-        
-        try:
-            if data == 'back_to_list':
-                await self.show_user_reminders(query)
-            elif data == 'create_new':
-                await query.edit_message_text(
-                    "Используй кнопку \"📝 Создать напоминание\" в главном меню"
-                )
-            elif data == 'show_stats':
-                user_id = query.from_user.id
-                stats = self.db.get_user_stats(user_id)
-                stats_text = TextFormatter.format_stats(stats)
-                await query.edit_message_text(stats_text, parse_mode='Markdown')
-            elif data.startswith('complete_'):
-                reminder_id = int(data.replace('complete_', ''))
-                await self.complete_reminder(query, reminder_id)
-            elif data.startswith('delete_'):
-                reminder_id = int(data.replace('delete_', ''))
-                await self.delete_reminder(query, reminder_id)
-            elif data.startswith('edit_'):
-                reminder_id = int(data.replace('edit_', ''))
-                await self.show_edit_options(query, reminder_id)
-            elif data.startswith('notify15_'):
-                reminder_id = int(data.replace('notify15_', ''))
-                await self.add_notification(query, reminder_id, 15)
-            elif data.startswith('back_to_reminder_'):
-                reminder_id = int(data.replace('back_to_reminder_', ''))
-                await self.show_reminder_details(query, reminder_id)
-            elif data == 'cancel':
-                await query.edit_message_text("Операция отменена.")
-            else:
-                # Если callback не распознан в общем обработчике
-                print(f"DEBUG: Unhandled callback in general handler: {data}")
-                await query.answer("Команда не распознана")
-                
-        except Exception as e:
-            logging.error(f"Error in callback handler: {e}")
-            await query.edit_message_text("❌ Произошла ошибка. Попробуй еще раз.")
-
-    # ===== GENERAL MESSAGE HANDLER =====
-
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка обычных сообщений"""
-        text = update.message.text
-        
-        if text == '📋 Мои напоминания':
-            await self.show_reminders_list(update)
-        elif text == '📊 Статистика':
-            await self.stats_command(update, context)
-        elif text == 'ℹ️ Помощь':
-            await self.help_command(update, context)
-        elif text == '📝 Создать напоминание':
-            await self.start_reminder_creation(update, context)
-        elif text == '🔄 Повторяющиеся':
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Общая команда отмены"""
+        if context.user_data.get('reminder_state'):
+            context.user_data.clear()
             await update.message.reply_text(
-                "🔄 Для создания повторяющихся напоминаний используй кнопку \"📝 Создать напоминание\" "
-                "и выбери нужный тип повторения в процессе создания.",
+                "Создание напоминания отменено.",
                 reply_markup=Keyboards.main_menu()
             )
-        elif text.lower().startswith('напомни'):
-            await self.quick_reminder(update, text)
         else:
             await update.message.reply_text(
-                "Используй кнопки меню или напиши /help для помощи",
+                "Нет активного диалога для отмены.",
                 reply_markup=Keyboards.main_menu()
             )
 
@@ -493,13 +434,6 @@ class ImprovedReminderBot:
                 f"для полного процесса создания.",
                 reply_markup=Keyboards.main_menu()
             )
-
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Общая команда отмены"""
-        await update.message.reply_text(
-            "Нет активного диалога для отмены.",
-            reply_markup=Keyboards.main_menu()
-        )
 
     # ===== REMINDER MANAGEMENT METHODS =====
 
