@@ -1,3 +1,5 @@
+import sqlite3  # Добавьте эту строку в начале файла
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from datetime import datetime, timedelta
@@ -12,13 +14,62 @@ class ReminderScheduler:
         self.db = Database()
         self.bot = bot
         self.start_scheduler()
-        # Убрали восстановление напоминаний для простоты
-        # self.restore_pending_reminders()
+        self.restore_pending_reminders()
 
     def start_scheduler(self):
         """Запуск планировщика"""
         self.scheduler.start()
         logging.info("Scheduler started")
+
+    def restore_pending_reminders(self):
+        """Восстановление напоминаний при перезапуске бота"""
+        try:
+            # Получаем все активные напоминания
+            conn = self.db.conn if hasattr(self.db, 'conn') else None
+            if not conn:
+                conn = sqlite3.connect(self.db.db_name)
+            
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, user_id, reminder_text, reminder_time, repeat_type, notify_before
+                FROM reminders 
+                WHERE status = 'active' AND reminder_time > datetime('now')
+                ORDER BY reminder_time
+            ''')
+            
+            reminders = cursor.fetchall()
+            
+            if not hasattr(self.db, 'conn'):
+                conn.close()
+            
+            restored_count = 0
+            for rem_id, user_id, text, reminder_time_str, repeat_type, notify_before in reminders:
+                try:
+                    # Парсим время из базы
+                    if '.' in reminder_time_str:
+                        reminder_time = datetime.strptime(reminder_time_str, '%Y-%m-%d %H:%M:%S.%f')
+                    else:
+                        reminder_time = datetime.strptime(reminder_time_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    # Планируем основное напоминание
+                    self.add_reminder(user_id, text, reminder_time, rem_id)
+                    
+                    # Планируем уведомление заранее
+                    if notify_before > 0:
+                        notify_time = reminder_time - timedelta(minutes=notify_before)
+                        if notify_time > datetime.utcnow():
+                            self.add_notification(user_id, text, notify_time, rem_id, True)
+                    
+                    restored_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error restoring reminder {rem_id}: {e}")
+                    continue
+            
+            logging.info(f"Restored {restored_count} pending reminders")
+            
+        except Exception as e:
+            logging.error(f"Error in restore_pending_reminders: {e}")
 
     def add_reminder(self, user_id, reminder_text, reminder_time, reminder_id, is_notification=False):
         """Добавление напоминания в планировщик"""
@@ -56,7 +107,7 @@ class ReminderScheduler:
                 
                 # Помечаем как выполненное для одноразовых напоминаний
                 reminder = self.db.get_reminder(reminder_id)
-                if reminder and reminder[5] == 'once':  # repeat_type находится в 5-й позиции
+                if reminder and reminder[5] == 'once':
                     self.db.update_reminder_status(reminder_id, 'completed')
                 elif reminder and reminder[5] != 'once':
                     # Для повторяющихся - создаем следующее напоминание
@@ -73,7 +124,7 @@ class ReminderScheduler:
         try:
             user_id, reminder_text, reminder_time_str, category, repeat_type, status = reminder[1:7]
             
-            # Исправляем парсинг времени
+            # Парсим время
             try:
                 if '.' in reminder_time_str:
                     reminder_time = datetime.strptime(reminder_time_str, '%Y-%m-%d %H:%M:%S.%f')
@@ -90,7 +141,7 @@ class ReminderScheduler:
                 full_reminder = self.db.get_reminder(reminder_id)
                 notify_before = full_reminder[7] if len(full_reminder) > 7 else 0
                 
-                # Создаем новое напоминание для следующего повторения
+                # Создаем новое напоминание
                 new_reminder_id = self.db.add_reminder(
                     user_id, reminder_text, next_time, category, repeat_type, notify_before
                 )

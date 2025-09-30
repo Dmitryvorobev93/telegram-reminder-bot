@@ -462,58 +462,59 @@ class ImprovedReminderBot:
         
         await self.finish_reminder_creation(query, context)
 
-    async def finish_reminder_creation(self, query, context):
-        """Завершение создания напоминания"""
-        user_id = query.from_user.id
-        reminder_text = context.user_data.get('reminder_text', '')
-        reminder_time = context.user_data.get('reminder_time')
-        category = context.user_data.get('category', 'other')
-        repeat_type = context.user_data.get('repeat_type', 'once')
-        notify_before = context.user_data.get('notify_before', 0)
-        
-        if not reminder_text or not reminder_time:
-            await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
-            context.user_data.clear()
-            return
-        
-        # Сохраняем в базу (время уже в UTC)
-        reminder_id = self.db.add_reminder(
-            user_id, reminder_text, reminder_time, category, repeat_type, notify_before
-        )
-        
-        # Добавляем в планировщик
-        self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
-        
-        # Уведомление заранее
-        if notify_before > 0:
-            notify_time = reminder_time - timedelta(minutes=notify_before)
-            if notify_time > datetime.utcnow():
-                self.scheduler.add_notification(user_id, reminder_text, notify_time, reminder_id, True)
-        
-        # Формируем сообщение об успехе - конвертируем в московское время для отображения
-        moscow_offset = timedelta(hours=3)
-        display_time = reminder_time + moscow_offset
-        
-        success_text = (
-            f"✅ *Напоминание создано!*\n\n"
-            f"*Что:* {reminder_text}\n"
-            f"*Когда:* {display_time.strftime('%d.%m.%Y в %H:%M')}\n"
-            f"*Категория:* {Config.CATEGORIES.get(category, 'Другое')}\n"
-            f"*Повтор:* {Config.REPEAT_OPTIONS.get(repeat_type, 'Один раз')}\n"
-        )
-        
-        if notify_before > 0:
-            success_text += f"*Уведомление:* за {notify_before} минут\n"
-        
-        success_text += f"\nID: {reminder_id}"
-        
-        await query.edit_message_text(
-            text=success_text,
-            parse_mode='Markdown'
-        )
-        
-        # Очищаем состояние
+    # В методе finish_reminder_creation:
+async def finish_reminder_creation(self, query, context):
+    """Завершение создания напоминания"""
+    user_id = query.from_user.id
+    reminder_text = context.user_data.get('reminder_text', '')
+    reminder_time = context.user_data.get('reminder_time')  # Время в UTC
+    category = context.user_data.get('category', 'other')
+    repeat_type = context.user_data.get('repeat_type', 'once')
+    notify_before = context.user_data.get('notify_before', 0)
+    
+    if not reminder_text or not reminder_time:
+        await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
         context.user_data.clear()
+        return
+    
+    # Сохраняем в базу (время уже в UTC)
+    reminder_id = self.db.add_reminder(
+        user_id, reminder_text, reminder_time, category, repeat_type, notify_before
+    )
+    
+    # Добавляем в планировщик
+    self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
+    
+    # Уведомление заранее
+    if notify_before > 0:
+        notify_time = reminder_time - timedelta(minutes=notify_before)
+        if notify_time > datetime.utcnow():
+            self.scheduler.add_notification(user_id, reminder_text, notify_time, reminder_id, True)
+    
+    # Формируем сообщение об успехе - конвертируем в московское время для отображения
+    moscow_offset = timedelta(hours=3)
+    display_time = reminder_time + moscow_offset
+    
+    success_text = (
+        f"✅ *Напоминание создано!*\n\n"
+        f"*Что:* {reminder_text}\n"
+        f"*Когда:* {display_time.strftime('%d.%m.%Y в %H:%M')}\n"
+        f"*Категория:* {Config.CATEGORIES.get(category, 'Другое')}\n"
+        f"*Повтор:* {Config.REPEAT_OPTIONS.get(repeat_type, 'Один раз')}\n"
+    )
+    
+    if notify_before > 0:
+        success_text += f"*Уведомление:* за {notify_before} минут\n"
+    
+    success_text += f"\nID: {reminder_id}"
+    
+    await query.edit_message_text(
+        text=success_text,
+        parse_mode='Markdown'
+    )
+    
+    # Очищаем состояние
+    context.user_data.clear()
 
     async def cancel_creation(self, query, context):
         """Отмена создания напоминания"""
