@@ -9,8 +9,8 @@ class Config:
     TIMEZONE = 'Europe/Moscow'
     
     # Пути к данным
-    DB_PATH = os.getenv('DB_PATH', 'reminders.db')
-    BACKUP_DIR = os.getenv('BACKUP_DIR', 'backups')
+    DB_PATH = os.getenv('DB_PATH', '/app/data/reminders.db')
+    BACKUP_DIR = os.getenv('BACKUP_DIR', '/app/backups')
     
     # Настройки повторений
     REPEAT_OPTIONS = {

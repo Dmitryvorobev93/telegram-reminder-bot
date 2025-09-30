@@ -1,10 +1,9 @@
-import sqlite3  # Добавьте эту строку в начале файла
-
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from datetime import datetime, timedelta
 import logging
 import asyncio
+import sqlite3
 from database import Database
 from utils import TimeParser
 
@@ -25,22 +24,7 @@ class ReminderScheduler:
         """Восстановление напоминаний при перезапуске бота"""
         try:
             # Получаем все активные напоминания
-            conn = self.db.conn if hasattr(self.db, 'conn') else None
-            if not conn:
-                conn = sqlite3.connect(self.db.db_name)
-            
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, user_id, reminder_text, reminder_time, repeat_type, notify_before
-                FROM reminders 
-                WHERE status = 'active' AND reminder_time > datetime('now')
-                ORDER BY reminder_time
-            ''')
-            
-            reminders = cursor.fetchall()
-            
-            if not hasattr(self.db, 'conn'):
-                conn.close()
+            reminders = self.db.get_pending_reminders()
             
             restored_count = 0
             for rem_id, user_id, text, reminder_time_str, repeat_type, notify_before in reminders:
@@ -85,9 +69,9 @@ class ReminderScheduler:
                 args=[user_id, reminder_text, reminder_id, is_notification]
             )
             
-            logging.info(f"Reminder scheduled for {reminder_time} (notification: {is_notification})")
+            logging.info(f"Reminder scheduled for user {user_id} at {reminder_time} (notification: {is_notification})")
         except Exception as e:
-            logging.error(f"Error scheduling reminder: {e}")
+            logging.error(f"Error scheduling reminder for user {user_id}: {e}")
 
     def send_reminder_wrapper(self, user_id, reminder_text, reminder_id, is_notification=False):
         """Обертка для асинхронной отправки напоминания"""
@@ -100,16 +84,25 @@ class ReminderScheduler:
     async def send_reminder(self, user_id, reminder_text, reminder_id, is_notification=False):
         """Отправка напоминания пользователю"""
         try:
+            # Проверяем, существует ли еще пользователь и напоминание
+            reminder = self.db.get_reminder(reminder_id)
+            if not reminder:
+                logging.info(f"Reminder {reminder_id} not found, skipping")
+                return
+                
+            if reminder[1] != user_id:  # user_id в позиции 1
+                logging.warning(f"User ID mismatch for reminder {reminder_id}")
+                return
+            
             if is_notification:
                 message = f"🔔 Скоро напоминание: {reminder_text}"
             else:
                 message = f"⏰ Напоминание: {reminder_text}"
                 
                 # Помечаем как выполненное для одноразовых напоминаний
-                reminder = self.db.get_reminder(reminder_id)
-                if reminder and reminder[5] == 'once':
+                if reminder[5] == 'once':  # repeat_type в позиции 5
                     self.db.update_reminder_status(reminder_id, 'completed')
-                elif reminder and reminder[5] != 'once':
+                elif reminder[5] != 'once':
                     # Для повторяющихся - создаем следующее напоминание
                     self.schedule_next_repetition(reminder_id, reminder)
             
@@ -117,7 +110,7 @@ class ReminderScheduler:
             logging.info(f"Reminder sent to user {user_id} (notification: {is_notification})")
             
         except Exception as e:
-            logging.error(f"Failed to send reminder: {e}")
+            logging.error(f"Failed to send reminder to user {user_id}: {e}")
 
     def schedule_next_repetition(self, reminder_id, reminder):
         """Планирование следующего повторения"""
@@ -154,10 +147,10 @@ class ReminderScheduler:
                     notify_time = next_time - timedelta(minutes=notify_before)
                     self.add_notification(user_id, reminder_text, notify_time, new_reminder_id, True)
                 
-                logging.info(f"Scheduled next repetition for reminder {new_reminder_id} at {next_time}")
+                logging.info(f"Scheduled next repetition for user {user_id}, reminder {new_reminder_id} at {next_time}")
                 
         except Exception as e:
-            logging.error(f"Error scheduling next repetition: {e}")
+            logging.error(f"Error scheduling next repetition for user {user_id}: {e}")
 
     def cancel_reminder(self, reminder_id):
         """Отмена напоминания в планировщике"""
@@ -173,7 +166,7 @@ class ReminderScheduler:
                 
             logging.info(f"Cancelled reminder {reminder_id}")
         except Exception as e:
-            logging.error(f"Error cancelling reminder: {e}")
+            logging.error(f"Error cancelling reminder {reminder_id}: {e}")
 
     def shutdown(self):
         """Остановка планировщика"""

@@ -45,6 +45,7 @@ class ImprovedReminderBot:
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("my_reminders", self.my_reminders_command))
+        self.application.add_handler(CommandHandler("my_info", self.my_info_command))
         self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         self.application.add_handler(CommandHandler("debug", self.debug_reminders))
         
@@ -68,6 +69,168 @@ class ImprovedReminderBot:
         print("Улучшенный бот запущен! Нажми Ctrl+C для остановки")
         self.application.run_polling()
 
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start"""
+        user = update.message.from_user
+        user_id = user.id
+        
+        # Регистрируем/обновляем пользователя
+        self.db.add_or_update_user(
+            user_id=user_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+        
+        welcome_text = f"""
+Привет, {user.first_name}! 👋
+
+Я улучшенный бот-напоминалка! Теперь я умею:
+
+📝 Создавать напоминания с категориями
+🔄 Работать с повторяющимися напоминаниями  
+🔔 Уведомлять заранее о событиях
+📊 Показывать статистику
+✏️ Редактировать и удалять напоминания
+
+Используй кнопки ниже или команды:
+/remind - создать напоминание
+/stats - посмотреть статистику
+/help - помощь
+
+💡 Все ваши напоминания хранятся отдельно и доступны только вам.
+        """
+        await update.message.reply_text(
+            welcome_text, 
+            reply_markup=Keyboards.main_menu(),
+            parse_mode='Markdown'
+        )
+
+    async def my_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать информацию о пользователе"""
+        user = update.message.from_user
+        user_id = user.id
+        
+        user_info = self.db.get_user_info(user_id)
+        reminders = self.db.get_user_reminders(user_id)
+        active_reminders = self.db.get_user_reminders(user_id, status='active')
+        
+        text = f"""
+👤 *Ваш профиль:*
+
+🆔 ID: `{user_id}`
+👤 Имя: {user.first_name or 'Не указано'}
+📛 Фамилия: {user.last_name or 'Не указано'}  
+📱 Username: @{user.username or 'Не указано'}
+
+📊 *Статистика:*
+📝 Всего напоминаний: {len(reminders)}
+⏳ Активных: {len(active_reminders)}
+✅ Выполнено: {len([r for r in reminders if r[5] == 'completed'])}
+
+💾 *Данные:*
+Все ваши напоминания хранятся безопасно и доступны только вам.
+        """
+        
+        await update.message.reply_text(text, parse_mode='Markdown')
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /help"""
+        help_text = """
+🤖 *Как пользоваться улучшенным ботом:*
+
+*📝 Создание напоминания:*
+1. Нажми "📝 Создать напоминание"
+2. Введи текст напоминания
+3. Выбери время (или введи текстом)
+4. Выбери категорию
+5. Настрой повторение (опционально)
+6. Настрой уведомление заранее (опционально)
+
+*📋 Управление напоминаниями:*
+- Нажми "📋 Мои напоминания" чтобы посмотреть все
+- Используй кнопки для управления каждым напоминанием
+
+*🔄 Повторяющиеся напоминания:*
+- Ежедневные, еженедельные, ежемесячные
+- Автоматически создаются заново
+
+*🔔 Уведомления заранее:*
+- Получи уведомление за 15, 30, 60 минут до события
+
+*📊 Статистика:*
+- Отслеживай выполненные и активные напоминания
+- Статистика по категориям
+
+*Примеры быстрых команд:*
+"напомни позвонить маме через 2 часа"
+"напомни встречу завтра в 15:00"
+
+💡 *Безопасность:* Все ваши данные доступны только вам!
+        """
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать статистику пользователя"""
+        user_id = update.message.from_user.id
+        
+        # Обновляем активность пользователя
+        self.db.add_or_update_user(user_id)
+        
+        stats = self.db.get_user_stats(user_id)
+        
+        print(f"DEBUG: Stats for user {user_id}: {stats}")
+        
+        stats_text = TextFormatter.format_stats(stats)
+        await update.message.reply_text(
+            stats_text, 
+            parse_mode='Markdown',
+            reply_markup=Keyboards.main_menu()
+        )
+
+    async def my_reminders_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать напоминания пользователя"""
+        user_id = update.message.from_user.id
+        # Обновляем активность пользователя
+        self.db.add_or_update_user(user_id)
+        await self.show_reminders_list(update)
+
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /cancel"""
+        user_id = update.message.from_user.id
+        # Обновляем активность пользователя
+        self.db.add_or_update_user(user_id)
+        
+        if context.user_data.get('reminder_state'):
+            context.user_data.clear()
+            await update.message.reply_text(
+                "Создание напоминания отменено.",
+                reply_markup=Keyboards.main_menu()
+            )
+        else:
+            await update.message.reply_text(
+                "Нет активного диалога для отмены.",
+                reply_markup=Keyboards.main_menu()
+            )
+
+    async def debug_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Временный метод для отладки"""
+        user_id = update.message.from_user.id
+        print(f"DEBUG: User ID: {user_id}")
+        
+        # Проверим все напоминания пользователя
+        reminders = self.db.get_user_reminders(user_id)
+        print(f"DEBUG: All reminders: {reminders}")
+        
+        # Проверим активные напоминания
+        active_reminders = self.db.get_user_reminders(user_id, status='active')
+        print(f"DEBUG: Active reminders: {active_reminders}")
+        
+        await update.message.reply_text(
+            f"Отладка: найдено {len(active_reminders)} активных напоминаний",
+            reply_markup=Keyboards.main_menu()
+        )
+
     async def backup_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Создание бэкапа базы данных"""
         user_id = update.message.from_user.id
@@ -81,12 +244,13 @@ class ImprovedReminderBot:
         
         result = self.db.create_backup()
         if result:
-            filename, size_kb, reminder_count = result
+            filename, size_kb, reminder_count, user_count = result
             await update.message.reply_text(
                 f"✅ Бэкап создан успешно!\n\n"
                 f"📁 Файл: {filename}\n"
                 f"📊 Размер: {size_kb} KB\n"
                 f"📝 Напоминаний: {reminder_count}\n"
+                f"👥 Пользователей: {user_count}\n"
                 f"💾 Путь: {Config.BACKUP_DIR}/"
             )
         else:
@@ -108,12 +272,13 @@ class ImprovedReminderBot:
             return
         
         text = "📋 Список бэкапов:\n\n"
-        for i, (filename, created_at, size_kb, reminder_count) in enumerate(backups, 1):
+        for i, (filename, created_at, size_kb, reminder_count, user_count) in enumerate(backups, 1):
             created_str = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y %H:%M')
             text += f"{i}. {filename}\n"
             text += f"   📅 Создан: {created_str}\n"
             text += f"   📊 Размер: {size_kb} KB\n"
-            text += f"   📝 Напоминаний: {reminder_count}\n\n"
+            text += f"   📝 Напоминаний: {reminder_count}\n"
+            text += f"   👥 Пользователей: {user_count}\n\n"
         
         await update.message.reply_text(text)
 
@@ -161,6 +326,7 @@ class ImprovedReminderBot:
             return
         
         total_reminders = self.db.get_total_reminders_count()
+        total_users = self.db.get_total_users_count()
         db_size = os.path.getsize(Config.DB_PATH) // 1024 if os.path.exists(Config.DB_PATH) else 0
         
         text = (
@@ -168,131 +334,19 @@ class ImprovedReminderBot:
             f"📁 Путь: {Config.DB_PATH}\n"
             f"📊 Размер: {db_size} KB\n"
             f"📝 Всего напоминаний: {total_reminders}\n"
+            f"👥 Всего пользователей: {total_users}\n"
             f"💾 Директория бэкапов: {Config.BACKUP_DIR}\n"
             f"🕒 Часовой пояс: {Config.TIMEZONE}"
         )
         
         await update.message.reply_text(text)
 
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        user = update.message.from_user
-        welcome_text = f"""
-Привет, {user.first_name}! 👋
-
-Я улучшенный бот-напоминалка! Теперь я умею:
-
-📝 Создавать напоминания с категориями
-🔄 Работать с повторяющимися напоминаниями
-🔔 Уведомлять заранее о событиях
-📊 Показывать статистику
-✏️ Редактировать и удалять напоминания
-
-Используй кнопки ниже или команды:
-/remind - создать напоминание
-/stats - посмотреть статистику
-/help - помощь
-        """
-        await update.message.reply_text(
-            welcome_text, 
-            reply_markup=Keyboards.main_menu(),
-            parse_mode='Markdown'
-        )
-
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /help"""
-        help_text = """
-🤖 *Как пользоваться улучшенным ботом:*
-
-*📝 Создание напоминания:*
-1. Нажми "📝 Создать напоминание"
-2. Введи текст напоминания
-3. Выбери время (или введи текстом)
-4. Выбери категорию
-5. Настрой повторение (опционально)
-6. Настрой уведомление заранее (опционально)
-
-*📋 Управление напоминаниями:*
-- Нажми "📋 Мои напоминания" чтобы посмотреть все
-- Используй кнопки для управления каждым напоминанием
-
-*🔄 Повторяющиеся напоминания:*
-- Ежедневные, еженедельные, ежемесячные
-- Автоматически создаются заново
-
-*🔔 Уведомления заранее:*
-- Получи уведомление за 15, 30, 60 минут до события
-
-*📊 Статистика:*
-- Отслеживай выполненные и активные напоминания
-- Статистика по категориям
-
-*Примеры быстрых команд:*
-"напомни позвонить маме через 2 часа"
-"напомни встречу завтра в 15:00"
-        """
-        await update.message.reply_text(help_text, parse_mode='Markdown')
-
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать статистику пользователя"""
-        user_id = update.message.from_user.id
-        stats = self.db.get_user_stats(user_id)
-        
-        print(f"DEBUG: Stats for user {user_id}: {stats}")
-        
-        stats_text = TextFormatter.format_stats(stats)
-        await update.message.reply_text(
-            stats_text, 
-            parse_mode='Markdown',
-            reply_markup=Keyboards.main_menu()
-        )
-
-    async def my_reminders_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать напоминания пользователя"""
-        await self.show_reminders_list(update)
-
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /cancel"""
-        if context.user_data.get('reminder_state'):
-            context.user_data.clear()
-            await update.message.reply_text(
-                "Создание напоминания отменено.",
-                reply_markup=Keyboards.main_menu()
-            )
-        else:
-            await update.message.reply_text(
-                "Нет активного диалога для отмены.",
-                reply_markup=Keyboards.main_menu()
-            )
-
-    async def debug_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Временный метод для отладки"""
-        user_id = update.message.from_user.id
-        print(f"DEBUG: User ID: {user_id}")
-        
-        # Проверим все напоминания пользователя
-        reminders = self.db.get_user_reminders(user_id)
-        print(f"DEBUG: All reminders: {reminders}")
-        
-        # Проверим активные напоминания
-        active_reminders = self.db.get_user_reminders(user_id, status='active')
-        print(f"DEBUG: Active reminders: {active_reminders}")
-        
-        # Проверим базу данных напрямую
-        conn = sqlite3.connect('reminders.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM reminders WHERE user_id = ?', (user_id,))
-        all_records = cursor.fetchall()
-        print(f"DEBUG: Raw DB records: {all_records}")
-        conn.close()
-        
-        await update.message.reply_text(
-            f"Отладка: найдено {len(active_reminders)} активных напоминаний",
-            reply_markup=Keyboards.main_menu()
-        )
-
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка обычных сообщений"""
+        user_id = update.message.from_user.id
+        # Обновляем активность пользователя
+        self.db.add_or_update_user(user_id)
+        
         text = update.message.text
         
         # Проверяем, находится ли пользователь в процессе создания напоминания
@@ -323,9 +377,13 @@ class ImprovedReminderBot:
         query = update.callback_query
         await query.answer()
         
+        user_id = query.from_user.id
+        # Обновляем активность пользователя
+        self.db.add_or_update_user(user_id)
+        
         data = query.data
         
-        print(f"DEBUG: Callback received: {data}")
+        print(f"DEBUG: Callback received from user {user_id}: {data}")
         
         try:
             # Обработка создания напоминания
@@ -369,13 +427,14 @@ class ImprovedReminderBot:
                 await query.edit_message_text("❌ Неизвестная команда")
                 
         except Exception as e:
-            logging.error(f"Error in callback handler: {e}")
+            logging.error(f"Error in callback handler for user {user_id}: {e}")
             await query.edit_message_text("❌ Произошла ошибка. Попробуй еще раз.")
 
     # ===== REMINDER CREATION METHODS =====
 
     async def start_reminder_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Начало создания напоминания"""
+        user_id = update.message.from_user.id
         context.user_data.clear()
         context.user_data['reminder_state'] = 'waiting_text'
         
@@ -558,20 +617,25 @@ class ImprovedReminderBot:
     async def quick_reminder(self, update: Update, text: str):
         """Быстрое создание напоминания из текста"""
         try:
+            user_id = update.message.from_user.id
+            
             if " через " in text:
                 parts = text.split(" через ")
                 reminder_text = parts[0].replace("напомни", "").strip()
                 time_part = "через " + parts[1]
                 
                 reminder_time = TimeParser.parse_time(time_part)
-                user_id = update.message.from_user.id
                 
                 reminder_id = self.db.add_reminder(user_id, reminder_text, reminder_time)
                 self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
                 
+                # Конвертируем для отображения
+                moscow_offset = timedelta(hours=3)
+                display_time = reminder_time + moscow_offset
+                
                 await update.message.reply_text(
                     f"✅ Готово! Напомню: '{reminder_text}' "
-                    f"{reminder_time.strftime('%d.%m.%Y в %H:%M')}",
+                    f"{display_time.strftime('%d.%m.%Y в %H:%M')}",
                     reply_markup=Keyboards.main_menu()
                 )
             else:
@@ -581,7 +645,7 @@ class ImprovedReminderBot:
                     reply_markup=Keyboards.main_menu()
                 )
         except Exception as e:
-            logging.error(f"Error in quick reminder: {e}")
+            logging.error(f"Error in quick reminder for user {user_id}: {e}")
             await update.message.reply_text(
                 f"❌ Не могу понять время. Используй кнопку '📝 Создать напоминание' "
                 f"для полного процесса создания.",
@@ -610,33 +674,49 @@ class ImprovedReminderBot:
 
     async def complete_reminder(self, query, reminder_id):
         """Отметить напоминание как выполненное"""
-        self.db.update_reminder_status(reminder_id, 'completed')
-        self.scheduler.cancel_reminder(reminder_id)
+        user_id = query.from_user.id
+        reminder = self.db.get_reminder(reminder_id)
         
-        await query.edit_message_text(
-            text="✅ Напоминание отмечено как выполненное!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")]
-            ])
-        )
+        # Проверяем, принадлежит ли напоминание пользователю
+        if reminder and reminder[1] == user_id:  # user_id в позиции 1
+            self.db.update_reminder_status(reminder_id, 'completed')
+            self.scheduler.cancel_reminder(reminder_id)
+            
+            await query.edit_message_text(
+                text="✅ Напоминание отмечено как выполненное!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")]
+                ])
+            )
+        else:
+            await query.edit_message_text("❌ Напоминание не найдено или у вас нет доступа!")
 
     async def delete_reminder(self, query, reminder_id):
         """Удалить напоминание"""
-        self.db.delete_reminder(reminder_id)
-        self.scheduler.cancel_reminder(reminder_id)
+        user_id = query.from_user.id
+        reminder = self.db.get_reminder(reminder_id)
         
-        await query.edit_message_text(
-            text="❌ Напоминание удалено!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")]
-            ])
-        )
+        # Проверяем, принадлежит ли напоминание пользователю
+        if reminder and reminder[1] == user_id:  # user_id в позиции 1
+            self.db.delete_reminder(reminder_id)
+            self.scheduler.cancel_reminder(reminder_id)
+            
+            await query.edit_message_text(
+                text="❌ Напоминание удалено!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")]
+                ])
+            )
+        else:
+            await query.edit_message_text("❌ Напоминание не найдено или у вас нет доступа!")
 
     async def show_edit_options(self, query, reminder_id):
         """Показать опции редактирования напоминания"""
+        user_id = query.from_user.id
         reminder = self.db.get_reminder(reminder_id)
-        if not reminder:
-            await query.edit_message_text("❌ Напоминание не найдено!")
+        
+        if not reminder or reminder[1] != user_id:
+            await query.edit_message_text("❌ Напоминание не найдено или у вас нет доступа!")
             return
         
         await query.edit_message_text(
@@ -649,9 +729,11 @@ class ImprovedReminderBot:
 
     async def show_reminder_details(self, query, reminder_id):
         """Показать детали напоминания"""
+        user_id = query.from_user.id
         reminder = self.db.get_reminder(reminder_id)
-        if not reminder:
-            await query.edit_message_text("❌ Напоминание не найдено!")
+        
+        if not reminder or reminder[1] != user_id:
+            await query.edit_message_text("❌ Напоминание не найдено или у вас нет доступа!")
             return
         
         status_icons = {
@@ -660,10 +742,15 @@ class ImprovedReminderBot:
             'cancelled': '❌'
         }
         
+        # Конвертируем время для отображения
+        reminder_time = datetime.strptime(reminder[3], '%Y-%m-%d %H:%M:%S')
+        moscow_offset = timedelta(hours=3)
+        display_time = reminder_time + moscow_offset
+        
         text = (
             f"{status_icons.get(reminder[6], '⏳')} *Детали напоминания:*\n\n"
             f"*Текст:* {reminder[2]}\n"
-            f"*Время:* {reminder[3]}\n"
+            f"*Время:* {display_time.strftime('%d.%m.%Y %H:%M')}\n"
             f"*Категория:* {Config.CATEGORIES.get(reminder[4], 'Другое')}\n"
             f"*Повтор:* {Config.REPEAT_OPTIONS.get(reminder[5], 'Один раз')}\n"
             f"*Статус:* {reminder[6]}\n"
@@ -678,9 +765,11 @@ class ImprovedReminderBot:
 
     async def add_notification(self, query, reminder_id, minutes):
         """Добавить уведомление заранее"""
+        user_id = query.from_user.id
         reminder = self.db.get_reminder(reminder_id)
-        if not reminder:
-            await query.edit_message_text("❌ Напоминание не найдено!")
+        
+        if not reminder or reminder[1] != user_id:
+            await query.edit_message_text("❌ Напоминание не найдено или у вас нет доступа!")
             return
         
         self.db.update_reminder(reminder_id, notify_before=minutes)
