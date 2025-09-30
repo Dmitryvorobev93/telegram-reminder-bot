@@ -351,6 +351,7 @@ class ImprovedReminderBot:
         await self.finish_reminder_creation(query, context)
 
     # В методе finish_reminder_creation замените строку с форматированием времени:
+# В методе finish_reminder_creation добавляем конвертацию времени:
 async def finish_reminder_creation(self, query, context):
     """Завершение создания напоминания"""
     user_id = query.from_user.id
@@ -365,24 +366,23 @@ async def finish_reminder_creation(self, query, context):
         context.user_data.clear()
         return
     
-    # Сохраняем в базу (убираем таймзону для хранения)
-    reminder_time_naive = reminder_time.replace(tzinfo=None) if reminder_time.tzinfo else reminder_time
+    # Сохраняем в базу (время уже в UTC)
     reminder_id = self.db.add_reminder(
-        user_id, reminder_text, reminder_time_naive, category, repeat_type, notify_before
+        user_id, reminder_text, reminder_time, category, repeat_type, notify_before
     )
     
     # Добавляем в планировщик
-    self.scheduler.add_reminder(user_id, reminder_text, reminder_time_naive, reminder_id)
+    self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
     
     # Уведомление заранее
     if notify_before > 0:
         notify_time = reminder_time - timedelta(minutes=notify_before)
-        notify_time_naive = notify_time.replace(tzinfo=None) if notify_time.tzinfo else notify_time
-        if notify_time > datetime.now(Config.MOSCOW_TZ):
-            self.scheduler.add_notification(user_id, reminder_text, notify_time_naive, reminder_id, True)
+        if notify_time > datetime.utcnow():
+            self.scheduler.add_notification(user_id, reminder_text, notify_time, reminder_id, True)
     
-    # Формируем сообщение об успехе - используем московское время для отображения
-    display_time = reminder_time.astimezone(Config.MOSCOW_TZ) if reminder_time.tzinfo else reminder_time
+    # Формируем сообщение об успехе - конвертируем в московское время для отображения
+    moscow_offset = timedelta(hours=3)
+    display_time = reminder_time + moscow_offset
     
     success_text = (
         f"✅ *Напоминание создано!*\n\n"
