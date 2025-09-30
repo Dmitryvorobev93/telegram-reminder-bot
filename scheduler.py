@@ -12,40 +12,13 @@ class ReminderScheduler:
         self.db = Database()
         self.bot = bot
         self.start_scheduler()
-        self.restore_pending_reminders()
+        # Убрали восстановление напоминаний для простоты
+        # self.restore_pending_reminders()
 
     def start_scheduler(self):
         """Запуск планировщика"""
         self.scheduler.start()
         logging.info("Scheduler started")
-
-    def restore_pending_reminders(self):
-        """Восстановление напоминаний при перезапуске бота"""
-        try:
-            reminders = self.db.get_pending_reminders()
-            for rem_id, user_id, text, reminder_time, repeat_type, notify_before in reminders:
-                # Исправляем парсинг времени
-                try:
-                    if '.' in reminder_time:
-                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S.%f')
-                    else:
-                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S')
-                except ValueError as e:
-                    logging.error(f"Ошибка парсинга времени {reminder_time}: {e}")
-                    continue
-                
-                # Основное напоминание
-                self.add_reminder(user_id, text, reminder_time_obj, rem_id)
-                
-                # Уведомление за N минут
-                if notify_before > 0:
-                    notify_time = reminder_time_obj - timedelta(minutes=notify_before)
-                    if notify_time > datetime.utcnow():
-                        self.add_notification(user_id, text, notify_time, rem_id, is_notification=True)
-            
-            logging.info(f"Restored {len(reminders)} pending reminders")
-        except Exception as e:
-            logging.error(f"Error restoring reminders: {e}")
 
     def add_reminder(self, user_id, reminder_text, reminder_time, reminder_id, is_notification=False):
         """Добавление напоминания в планировщик"""
@@ -55,7 +28,7 @@ class ReminderScheduler:
             job_id = f"notify_{reminder_id}" if is_notification else str(reminder_id)
             
             self.scheduler.add_job(
-                self.send_reminder_wrapper,  # Изменено на обертку
+                self.send_reminder_wrapper,
                 trigger,
                 id=job_id,
                 args=[user_id, reminder_text, reminder_id, is_notification]
