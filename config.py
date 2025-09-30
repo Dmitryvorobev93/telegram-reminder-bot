@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     ADMIN_IDS = [123456789]  # Замени на свой ID
-    TIMEZONE = 'Europe/Moscow'
+    MOSCOW_TZ = pytz.timezone('Europe/Moscow')
     
     # Настройки повторений
     REPEAT_OPTIONS = {

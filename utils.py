@@ -11,13 +11,15 @@ class TimeParser:
     def parse_time(time_text):
         """Улучшенный парсинг времени с поддержкой повторений"""
         time_text = time_text.lower().strip()
-        now = datetime.now()
+        now = datetime.now(Config.MOSCOW_TZ)  # Используем московское время
         
         # Базовые форматы (как были)
         if time_text.startswith('через'):
             return TimeParser._parse_relative_time(time_text, now)
         elif 'завтра' in time_text:
             return TimeParser._parse_tomorrow_time(time_text, now)
+        elif 'сегодня' in time_text and 'в' in time_text:
+            return TimeParser._parse_today_time(time_text, now)
         elif ':' in time_text and len(time_text) <= 5:
             return TimeParser._parse_simple_time(time_text, now)
         elif '.' in time_text and ' в ' in time_text:
@@ -53,6 +55,12 @@ class TimeParser:
         return tomorrow.replace(hour=hours, minute=minutes, second=0, microsecond=0)
     
     @staticmethod
+    def _parse_today_time(time_text, now):
+        time_part = time_text.split('в ')[1]
+        hours, minutes = map(int, time_part.split(':'))
+        return now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+    
+    @staticmethod
     def _parse_simple_time(time_text, now):
         hours, minutes = map(int, time_text.split(':'))
         reminder_time = now.replace(hour=hours, minute=minutes, second=0, microsecond=0)
@@ -65,7 +73,8 @@ class TimeParser:
         date_part, time_part = time_text.split(' в ')
         day, month, year = map(int, date_part.split('.'))
         hours, minutes = map(int, time_part.split(':'))
-        return datetime(year, month, day, hours, minutes)
+        naive_dt = datetime(year, month, day, hours, minutes)
+        return Config.MOSCOW_TZ.localize(naive_dt)
     
     @staticmethod
     def calculate_next_reminder(reminder_time, repeat_type):
@@ -103,6 +112,9 @@ class TextFormatter:
                 else:
                     # Формат без микросекунд: 2025-09-29 19:55:23
                     time_obj = datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
+                
+                # Конвертируем в московское время для отображения
+                time_obj = time_obj.replace(tzinfo=None)  # Убираем таймзону если есть
                 time_str = time_obj.strftime('%d.%m.%Y %H:%M')
             except ValueError as e:
                 logging.error(f"Ошибка форматирования времени {time}: {e}")
