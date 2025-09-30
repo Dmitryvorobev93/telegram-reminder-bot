@@ -1,18 +1,17 @@
-FROM python:3.9
+FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Создаем директории для данных и бэкапов
+RUN mkdir -p /app/data /app/backups
 
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Проверяем, что файлы скопировались
-RUN echo "=== Checking files ===" && \
-    ls -la && \
-    echo "=== .env files ===" && \
-    ls -la .env* || echo "No .env files found"
+# Меняем путь к базе данных
+ENV DB_PATH=/app/data/reminders.db
+ENV BACKUP_DIR=/app/backups
 
 CMD ["python", "bot.py"]
-

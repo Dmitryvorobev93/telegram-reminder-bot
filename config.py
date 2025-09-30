@@ -5,8 +5,12 @@ load_dotenv()
 
 class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
-    ADMIN_IDS = [123456789]  # Замени на свой ID
+    ADMIN_IDS = [890219846]  # Замени на свой ID
     TIMEZONE = 'Europe/Moscow'
+    
+    # Пути к данным
+    DB_PATH = os.getenv('DB_PATH', 'reminders.db')
+    BACKUP_DIR = os.getenv('BACKUP_DIR', 'backups')
     
     # Настройки повторений
     REPEAT_OPTIONS = {

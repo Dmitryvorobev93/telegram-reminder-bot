@@ -48,11 +48,123 @@ class ImprovedReminderBot:
         self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         self.application.add_handler(CommandHandler("debug", self.debug_reminders))
         
+        # Команды управления бэкапами (только для администраторов)
+        self.application.add_handler(CommandHandler("backup", self.backup_command))
+        self.application.add_handler(CommandHandler("backups", self.backups_list_command))
+        self.application.add_handler(CommandHandler("restore", self.restore_command))
+        self.application.add_handler(CommandHandler("dbinfo", self.db_info_command))
+        
         # Обработчик всех callback
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
         
         # Обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+
+    async def backup_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Создание бэкапа базы данных"""
+        user_id = update.message.from_user.id
+        
+        # Проверяем права администратора
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+        
+        await update.message.reply_text("🔄 Создаю бэкап базы данных...")
+        
+        result = self.db.create_backup()
+        if result:
+            filename, size_kb, reminder_count = result
+            await update.message.reply_text(
+                f"✅ Бэкап создан успешно!\n\n"
+                f"📁 Файл: {filename}\n"
+                f"📊 Размер: {size_kb} KB\n"
+                f"📝 Напоминаний: {reminder_count}\n"
+                f"💾 Путь: {Config.BACKUP_DIR}/"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при создании бэкапа.")
+
+    async def backups_list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать список бэкапов"""
+        user_id = update.message.from_user.id
+        
+        # Проверяем права администратора
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+        
+        backups = self.db.get_backup_list()
+        
+        if not backups:
+            await update.message.reply_text("📭 Бэкапы не найдены.")
+            return
+        
+        text = "📋 Список бэкапов:\n\n"
+        for i, (filename, created_at, size_kb, reminder_count) in enumerate(backups, 1):
+            created_str = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y %H:%M')
+            text += f"{i}. {filename}\n"
+            text += f"   📅 Создан: {created_str}\n"
+            text += f"   📊 Размер: {size_kb} KB\n"
+            text += f"   📝 Напоминаний: {reminder_count}\n\n"
+        
+        await update.message.reply_text(text)
+
+    async def restore_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Восстановление из бэкапа"""
+        user_id = update.message.from_user.id
+        
+        # Проверяем права администратора
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "Использование: /restore <имя_файла>\n"
+                "Пример: /restore reminders_backup_20250929_202022.db\n\n"
+                "Посмотреть список бэкапов: /backups"
+            )
+            return
+        
+        backup_filename = context.args[0]
+        await update.message.reply_text("🔄 Восстанавливаю базу данных из бэкапа...")
+        
+        success = self.db.restore_from_backup(backup_filename)
+        if success:
+            await update.message.reply_text(
+                f"✅ База данных успешно восстановлена из {backup_filename}\n\n"
+                f"⚠️ Бот будет перезапущен для применения изменений."
+            )
+            # Перезапускаем бота
+            os._exit(1)
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка при восстановлении из {backup_filename}\n"
+                f"Проверьте правильность имени файла."
+            )
+
+    async def db_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Информация о базе данных"""
+        user_id = update.message.from_user.id
+        
+        # Проверяем права администратора
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("❌ Эта команда доступна только администраторам.")
+            return
+        
+        total_reminders = self.db.get_total_reminders_count()
+        db_size = os.path.getsize(Config.DB_PATH) // 1024 if os.path.exists(Config.DB_PATH) else 0
+        
+        text = (
+            f"📊 Информация о базе данных:\n\n"
+            f"📁 Путь: {Config.DB_PATH}\n"
+            f"📊 Размер: {db_size} KB\n"
+            f"📝 Всего напоминаний: {total_reminders}\n"
+            f"💾 Директория бэкапов: {Config.BACKUP_DIR}\n"
+            f"🕒 Часовой пояс: {Config.TIMEZONE}"
+        )
+        
+        await update.message.reply_text(text)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -307,7 +419,7 @@ class ImprovedReminderBot:
         
         await query.edit_message_text(
             text=f"📂 Категория: {Config.CATEGORIES.get(category, 'Другое')}\n\n"
-                "🔄 Нужно ли повторять напоминание?",
+                 "🔄 Нужно ли повторять напоминание?",
             reply_markup=Keyboards.repeat_options()
         )
 
@@ -350,60 +462,58 @@ class ImprovedReminderBot:
         
         await self.finish_reminder_creation(query, context)
 
-    # В методе finish_reminder_creation замените строку с форматированием времени:
-# В методе finish_reminder_creation добавляем конвертацию времени:
-async def finish_reminder_creation(self, query, context):
-    """Завершение создания напоминания"""
-    user_id = query.from_user.id
-    reminder_text = context.user_data.get('reminder_text', '')
-    reminder_time = context.user_data.get('reminder_time')
-    category = context.user_data.get('category', 'other')
-    repeat_type = context.user_data.get('repeat_type', 'once')
-    notify_before = context.user_data.get('notify_before', 0)
-    
-    if not reminder_text or not reminder_time:
-        await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
+    async def finish_reminder_creation(self, query, context):
+        """Завершение создания напоминания"""
+        user_id = query.from_user.id
+        reminder_text = context.user_data.get('reminder_text', '')
+        reminder_time = context.user_data.get('reminder_time')
+        category = context.user_data.get('category', 'other')
+        repeat_type = context.user_data.get('repeat_type', 'once')
+        notify_before = context.user_data.get('notify_before', 0)
+        
+        if not reminder_text or not reminder_time:
+            await query.edit_message_text("❌ Ошибка: не хватает данных напоминания. Начни заново.")
+            context.user_data.clear()
+            return
+        
+        # Сохраняем в базу (время уже в UTC)
+        reminder_id = self.db.add_reminder(
+            user_id, reminder_text, reminder_time, category, repeat_type, notify_before
+        )
+        
+        # Добавляем в планировщик
+        self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
+        
+        # Уведомление заранее
+        if notify_before > 0:
+            notify_time = reminder_time - timedelta(minutes=notify_before)
+            if notify_time > datetime.utcnow():
+                self.scheduler.add_notification(user_id, reminder_text, notify_time, reminder_id, True)
+        
+        # Формируем сообщение об успехе - конвертируем в московское время для отображения
+        moscow_offset = timedelta(hours=3)
+        display_time = reminder_time + moscow_offset
+        
+        success_text = (
+            f"✅ *Напоминание создано!*\n\n"
+            f"*Что:* {reminder_text}\n"
+            f"*Когда:* {display_time.strftime('%d.%m.%Y в %H:%M')}\n"
+            f"*Категория:* {Config.CATEGORIES.get(category, 'Другое')}\n"
+            f"*Повтор:* {Config.REPEAT_OPTIONS.get(repeat_type, 'Один раз')}\n"
+        )
+        
+        if notify_before > 0:
+            success_text += f"*Уведомление:* за {notify_before} минут\n"
+        
+        success_text += f"\nID: {reminder_id}"
+        
+        await query.edit_message_text(
+            text=success_text,
+            parse_mode='Markdown'
+        )
+        
+        # Очищаем состояние
         context.user_data.clear()
-        return
-    
-    # Сохраняем в базу (время уже в UTC)
-    reminder_id = self.db.add_reminder(
-        user_id, reminder_text, reminder_time, category, repeat_type, notify_before
-    )
-    
-    # Добавляем в планировщик
-    self.scheduler.add_reminder(user_id, reminder_text, reminder_time, reminder_id)
-    
-    # Уведомление заранее
-    if notify_before > 0:
-        notify_time = reminder_time - timedelta(minutes=notify_before)
-        if notify_time > datetime.utcnow():
-            self.scheduler.add_notification(user_id, reminder_text, notify_time, reminder_id, True)
-    
-    # Формируем сообщение об успехе - конвертируем в московское время для отображения
-    moscow_offset = timedelta(hours=3)
-    display_time = reminder_time + moscow_offset
-    
-    success_text = (
-        f"✅ *Напоминание создано!*\n\n"
-        f"*Что:* {reminder_text}\n"
-        f"*Когда:* {display_time.strftime('%d.%m.%Y в %H:%M')}\n"
-        f"*Категория:* {Config.CATEGORIES.get(category, 'Другое')}\n"
-        f"*Повтор:* {Config.REPEAT_OPTIONS.get(repeat_type, 'Один раз')}\n"
-    )
-    
-    if notify_before > 0:
-        success_text += f"*Уведомление:* за {notify_before} минут\n"
-    
-    success_text += f"\nID: {reminder_id}"
-    
-    await query.edit_message_text(
-        text=success_text,
-        parse_mode='Markdown'
-    )
-    
-    # Очищаем состояние
-    context.user_data.clear()
 
     async def cancel_creation(self, query, context):
         """Отмена создания напоминания"""

@@ -1,11 +1,15 @@
 import sqlite3
 import logging
+import os
+import shutil
 from datetime import datetime
 from config import Config
 
 class Database:
-    def __init__(self, db_name='reminders.db'):
-        self.db_name = db_name
+    def __init__(self, db_name=None):
+        self.db_name = db_name or Config.DB_PATH
+        # Создаем директорию для базы данных если её нет
+        os.makedirs(os.path.dirname(self.db_name), exist_ok=True)
         self.init_db()
 
     def init_db(self):
@@ -40,10 +44,107 @@ class Database:
             )
         ''')
         
+        # Таблица для бэкапов
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS backup_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                size_kb INTEGER,
+                reminder_count INTEGER
+            )
+        ''')
+        
         conn.commit()
         conn.close()
-        logging.info("Database initialized successfully")
+        logging.info(f"Database initialized successfully at {self.db_name}")
 
+    def create_backup(self):
+        """Создание бэкапа базы данных"""
+        try:
+            # Создаем директорию для бэкапов если её нет
+            os.makedirs(Config.BACKUP_DIR, exist_ok=True)
+            
+            # Генерируем имя файла с timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"reminders_backup_{timestamp}.db"
+            backup_path = os.path.join(Config.BACKUP_DIR, backup_filename)
+            
+            # Копируем базу данных
+            shutil.copy2(self.db_name, backup_path)
+            
+            # Получаем статистику бэкапа
+            file_size = os.path.getsize(backup_path) // 1024  # размер в KB
+            reminder_count = self.get_total_reminders_count()
+            
+            # Сохраняем информацию о бэкапе
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO backup_history (filename, size_kb, reminder_count)
+                VALUES (?, ?, ?)
+            ''', (backup_filename, file_size, reminder_count))
+            conn.commit()
+            conn.close()
+            
+            logging.info(f"Backup created: {backup_path} ({file_size} KB, {reminder_count} reminders)")
+            return backup_filename, file_size, reminder_count
+            
+        except Exception as e:
+            logging.error(f"Error creating backup: {e}")
+            return None
+
+    def get_backup_list(self):
+        """Получение списка бэкапов"""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT filename, created_at, size_kb, reminder_count 
+                FROM backup_history 
+                ORDER BY created_at DESC
+            ''')
+            backups = cursor.fetchall()
+            conn.close()
+            return backups
+        except Exception as e:
+            logging.error(f"Error getting backup list: {e}")
+            return []
+
+    def restore_from_backup(self, backup_filename):
+        """Восстановление из бэкапа"""
+        try:
+            backup_path = os.path.join(Config.BACKUP_DIR, backup_filename)
+            if not os.path.exists(backup_path):
+                raise FileNotFoundError(f"Backup file not found: {backup_path}")
+            
+            # Создаем бэкап текущей базы
+            current_backup = self.create_backup()
+            
+            # Заменяем текущую базу данных бэкапом
+            shutil.copy2(backup_path, self.db_name)
+            
+            logging.info(f"Database restored from backup: {backup_filename}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error restoring from backup: {e}")
+            return False
+
+    def get_total_reminders_count(self):
+        """Получение общего количества напоминаний"""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM reminders')
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+        except Exception as e:
+            logging.error(f"Error getting reminders count: {e}")
+            return 0
+
+    # Остальные методы остаются без изменений
     def add_reminder(self, user_id, reminder_text, reminder_time, category='other', repeat_type='once', notify_before=0):
         """Добавление напоминания с дополнительными параметрами"""
         conn = sqlite3.connect(self.db_name)
