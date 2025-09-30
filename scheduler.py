@@ -19,34 +19,33 @@ class ReminderScheduler:
         self.scheduler.start()
         logging.info("Scheduler started")
 
-    # В методе restore_pending_reminders и других местах, где проверяется время:
-def restore_pending_reminders(self):
-    """Восстановление напоминаний при перезапуске бота"""
-    try:
-        reminders = self.db.get_pending_reminders()
-        for rem_id, user_id, text, reminder_time, repeat_type, notify_before in reminders:
-            # Исправляем парсинг времени
-            try:
-                if '.' in reminder_time:
-                    reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S.%f')
-                else:
-                    reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S')
-            except ValueError as e:
-                logging.error(f"Ошибка парсинга времени {reminder_time}: {e}")
-                continue
+    def restore_pending_reminders(self):
+        """Восстановление напоминаний при перезапуске бота"""
+        try:
+            reminders = self.db.get_pending_reminders()
+            for rem_id, user_id, text, reminder_time, repeat_type, notify_before in reminders:
+                # Исправляем парсинг времени
+                try:
+                    if '.' in reminder_time:
+                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S.%f')
+                    else:
+                        reminder_time_obj = datetime.strptime(reminder_time, '%Y-%m-%d %H:%M:%S')
+                except ValueError as e:
+                    logging.error(f"Ошибка парсинга времени {reminder_time}: {e}")
+                    continue
+                
+                # Основное напоминание
+                self.add_reminder(user_id, text, reminder_time_obj, rem_id)
+                
+                # Уведомление за N минут
+                if notify_before > 0:
+                    notify_time = reminder_time_obj - timedelta(minutes=notify_before)
+                    if notify_time > datetime.utcnow():
+                        self.add_notification(user_id, text, notify_time, rem_id, is_notification=True)
             
-            # Основное напоминание
-            self.add_reminder(user_id, text, reminder_time_obj, rem_id)
-            
-            # Уведомление за N минут
-            if notify_before > 0:
-                notify_time = reminder_time_obj - timedelta(minutes=notify_before)
-                if notify_time > datetime.utcnow():  # Используем UTC
-                    self.add_notification(user_id, text, notify_time, rem_id, is_notification=True)
-        
-        logging.info(f"Restored {len(reminders)} pending reminders")
-    except Exception as e:
-        logging.error(f"Error restoring reminders: {e}")
+            logging.info(f"Restored {len(reminders)} pending reminders")
+        except Exception as e:
+            logging.error(f"Error restoring reminders: {e}")
 
     def add_reminder(self, user_id, reminder_text, reminder_time, reminder_id, is_notification=False):
         """Добавление напоминания в планировщик"""
